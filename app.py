@@ -115,8 +115,8 @@ def get_chart_data(symbol, timeframe):
         return jsonify({'error': 'Data file not found'}), 404
 
     try:
-        # Get number of candles from query parameter (default 100)
-        num_candles = request.args.get('candles', 100, type=int)
+        # Get number of candles from query parameter (default 572 for Dec 28 range)
+        num_candles = request.args.get('candles', 572, type=int)
         
         # Get date range parameters
         start_date = request.args.get('start')
