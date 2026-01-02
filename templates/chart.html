@@ -20,44 +20,53 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
             color: #ffffff;
-            min-height: 100vh;
-            padding: 10px;
+            height: 100vh;
+            width: 100vw;
+            margin: 0;
+            overflow: hidden;
         }
 
-        @media (min-width: 768px) {
-            body {
-                padding: 20px;
+        .main-layout {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+        }
+
+        .content-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 5px;
+            height: 100%;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+        }
+
+        @media (max-width: 768px) {
+            .content-area {
+                padding: 0 0 45px 0;
+                /* Add bottom padding for labels */
+                height: 100vh;
             }
-        }
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
+            .chart-container {
+                border-radius: 0;
+                border-left: none;
+                border-right: none;
+            }
         }
 
         header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 20px;
-            padding: 15px;
+            margin-bottom: 5px;
+            padding: 8px 12px;
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
+            border-radius: 12px;
             backdrop-filter: blur(10px);
-            flex-wrap: wrap;
-            gap: 15px;
-        }
-
-        @media (max-width: 600px) {
-            header {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-
-            .header-right {
-                width: 100%;
-                justify-content: space-between;
-            }
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .header-left {
@@ -84,187 +93,92 @@
         }
 
         h1 {
-            font-size: 1.5em;
+            font-size: 1.2em;
             background: linear-gradient(45deg, #00f2fe, #4facfe);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
+            font-weight: 800;
         }
 
         @media (min-width: 768px) {
             h1 {
-                font-size: 2em;
+                font-size: 1.8em;
             }
         }
 
-        .header-right {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        .info-badge {
-            padding: 6px 12px;
-            background: rgba(255, 255, 255, 0.1);
+        .dashboard-toggle {
+            background: rgba(0, 242, 254, 0.1);
+            border: 1px solid rgba(0, 242, 254, 0.3);
+            color: #00f2fe;
+            padding: 8px 15px;
             border-radius: 20px;
-            font-size: 0.8em;
-            white-space: nowrap;
-        }
-
-        .refresh-btn {
-            background: linear-gradient(45deg, #00f2fe, #4facfe);
-            color: white;
-            border: none;
-            padding: 8px 20px;
-            border-radius: 25px;
             cursor: pointer;
             font-size: 0.9em;
             font-weight: 600;
-            transition: all 0.3s ease;
-            white-space: nowrap;
-        }
-
-        .refresh-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(79, 172, 254, 0.4);
-        }
-
-        .controls {
             display: flex;
-            gap: 15px;
             align-items: center;
-            padding: 15px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
-            backdrop-filter: blur(10px);
-            margin-bottom: 20px;
-            flex-wrap: wrap;
+            gap: 8px;
+            transition: all 0.3s ease;
         }
 
-        .controls label {
+        .dashboard-toggle:hover {
+            background: rgba(0, 242, 254, 0.2);
+            box-shadow: 0 0 15px rgba(0, 242, 254, 0.2);
+        }
+
+        /* Side Panel Styles */
+        .side-panel {
+            width: 320px;
+            background: rgba(15, 12, 41, 0.7);
+            backdrop-filter: blur(25px);
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            overflow-y: auto;
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+            z-index: 1000;
+            box-shadow: -10px 0 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .side-panel.hidden {
+            transform: translateX(100%);
+            opacity: 0;
+            width: 0;
+            padding: 0;
+            overflow: hidden;
+            border-left: none;
+        }
+
+        @media (max-width: 1024px) {
+            .side-panel {
+                position: fixed;
+                right: 0;
+                top: 0;
+                bottom: 0;
+                width: 300px;
+            }
+
+            .side-panel.hidden {
+                transform: translateX(100%);
+                width: 300px;
+                /* Keep width for animation consistency */
+            }
+        }
+
+        .panel-section {
+            margin-bottom: 25px;
+        }
+
+        .panel-title {
+            font-size: 0.75em;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
             color: #a0a0a0;
-            font-size: 0.85em;
-        }
-
-        .controls select {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 6px 12px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 0.85em;
-        }
-
-        .controls select option {
-            background-color: #1a1a2e;
-            color: white;
-        }
-
-        .chart-container {
-            background: rgba(0, 0, 0, 0.3);
-            border-radius: 15px;
-            padding: 10px;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            width: 100%;
-            height: 70vh;
-            min-height: 500px;
-        }
-
-        @media (min-width: 1024px) {
-            .chart-container {
-                padding: 20px;
-                height: 1000px;
-            }
-        }
-
-        #chart {
-            width: 100%;
-            height: 100%;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 100px 20px;
-        }
-
-        .spinner {
-            border: 4px solid rgba(255, 255, 255, 0.1);
-            border-top: 4px solid #00f2fe;
-            border-radius: 50%;
-            width: 50px;
-            height: 50px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-
-        @keyframes spin {
-            0% {
-                transform: rotate(0deg);
-            }
-
-            100% {
-                transform: rotate(360deg);
-            }
-        }
-
-        .price-info {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-            margin: 20px 0;
-            padding: 15px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
-            backdrop-filter: blur(10px);
-        }
-
-        @media (min-width: 480px) {
-            .price-info {
-                grid-template-columns: repeat(3, 1fr);
-            }
-        }
-
-        @media (min-width: 768px) {
-            .price-info {
-                grid-template-columns: repeat(5, 1fr);
-                gap: 15px;
-                padding: 20px;
-            }
-        }
-
-        .price-item {
-            text-align: center;
-            padding: 10px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-        }
-
-        .price-label {
-            color: #a0a0a0;
-            font-size: 0.8em;
-            margin-bottom: 3px;
-        }
-
-        .price-value {
-            font-size: 1.1em;
-            font-weight: 700;
-            color: #00f2fe;
-        }
-
-        @media (min-width: 768px) {
-            .price-value {
-                font-size: 1.3em;
-            }
-        }
-
-        .error {
-            color: #ff6b6b;
-            text-align: center;
-            padding: 40px;
-            font-size: 1.1em;
+            margin-bottom: 12px;
+            display: block;
+            font-weight: 600;
         }
 
         .live-indicator {
@@ -273,7 +187,11 @@
             gap: 8px;
             font-size: 0.85em;
             color: #00f2fe;
-            font-weight: 600;
+            font-weight: 700;
+            background: rgba(0, 242, 254, 0.1);
+            padding: 5px 12px;
+            border-radius: 15px;
+            width: fit-content;
         }
 
         .live-pulse {
@@ -301,75 +219,240 @@
                 opacity: 1;
             }
         }
+
+        .info-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .info-card-label {
+            font-size: 0.75em;
+            color: #888;
+            margin-bottom: 2px;
+        }
+
+        .info-card-value {
+            font-size: 0.95em;
+            font-weight: 600;
+            color: #efefef;
+        }
+
+        .refresh-btn {
+            background: linear-gradient(45deg, #00f2fe, #4facfe);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 0.95em;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(79, 172, 254, 0.4);
+        }
+
+        .controls-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .control-group label {
+            font-size: 0.8em;
+            color: #a0a0a0;
+        }
+
+        .control-group select {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9em;
+            outline: none;
+        }
+
+        .price-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .price-item-small {
+            background: rgba(255, 255, 255, 0.03);
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .price-label-small {
+            font-size: 0.7em;
+            color: #777;
+            text-transform: uppercase;
+        }
+
+        .price-value-small {
+            font-size: 1em;
+            font-weight: 700;
+            color: #00f2fe;
+        }
+
+        .chart-container {
+            flex: 1;
+            min-height: 0;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 15px;
+            padding: 0;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        #chart {
+            width: 100%;
+            height: 100%;
+        }
+
+        .close-panel-btn {
+            display: none;
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.5em;
+            cursor: pointer;
+        }
+
+        @media (max-width: 1024px) {
+            .close-panel-btn {
+                display: block;
+            }
+        }
     </style>
 </head>
 
 <body>
-    <div class="container">
-        <header>
-            <div class="header-left">
-                <button class="back-btn" onclick="goBack()">← Back</button>
-                <h1>{{ symbol }} - {{ timeframe.upper() }}</h1>
+    <div class="main-layout">
+        <div class="content-area">
+            <header>
+                <div class="header-left">
+                    <button class="back-btn" onclick="goBack()">← Back</button>
+                    <h1>{{ symbol }} - {{ timeframe.upper() }}</h1>
+                </div>
+                <div class="header-right">
+                    <button class="dashboard-toggle" onclick="toggleDashboard()">
+                        <span>📊 Stats & Controls</span>
+                    </button>
+                </div>
+            </header>
+
+            <div class="chart-container">
+                <div id="chart"></div>
             </div>
-            <div class="header-right">
+        </div>
+
+        <aside class="side-panel hidden" id="sidePanel">
+            <button class="close-panel-btn" onclick="toggleDashboard()">×</button>
+
+            <div class="panel-section">
+                <span class="panel-subtitle"
+                    style="color: #00f2fe; margin-bottom: 5px; display: block; font-size: 0.8em; font-weight: 700;">Status</span>
                 <div class="live-indicator">
                     <div class="live-pulse"></div>
-                    <span>LIVE</span>
-                </div>
-                <div class="info-badge">📊 {{ total_candles }} candles</div>
-                <div class="info-badge">🕐 Last: <span id="lastUpdatedTS">{{ last_candle }}</span></div>
-                <button class="refresh-btn" onclick="refreshChart()">🔄 Refresh</button>
-            </div>
-        </header>
-
-        <div class="controls">
-            <label for="candleCount">Candles to display:</label>
-            <select id="candleCount" onchange="loadChart()">
-                <option value="50">50</option>
-                <option value="100" selected>100</option>
-                <option value="200">200</option>
-                <option value="500">500</option>
-                <option value="1000">1000</option>
-            </select>
-
-            <label style="margin-left: 20px;">Chart Features:</label>
-            <span style="color: #a0a0a0; font-size: 0.85em;">✨ Zoom (drag), Pan (shift+drag), Reset
-                (double-click)</span>
-        </div>
-
-        <div class="price-info" id="priceInfo" style="display: none;">
-            <div class="price-item">
-                <div class="price-label">Open</div>
-                <div class="price-value" id="priceOpen">-</div>
-            </div>
-            <div class="price-item">
-                <div class="price-label">High</div>
-                <div class="price-value" id="priceHigh">-</div>
-            </div>
-            <div class="price-item">
-                <div class="price-label">Low</div>
-                <div class="price-value" id="priceLow">-</div>
-            </div>
-            <div class="price-item">
-                <div class="price-label">Close</div>
-                <div class="price-value" id="priceClose">-</div>
-            </div>
-            <div class="price-item">
-                <div class="price-label">Volume</div>
-                <div class="price-value" id="priceVolume">-</div>
-            </div>
-        </div>
-
-        <div class="chart-container">
-            <div id="chart">
-                <div class="loading">
-                    <div class="spinner"></div>
-                    <div>Loading interactive chart...</div>
+                    <span>LIVE UPDATING</span>
                 </div>
             </div>
-        </div>
 
+            <div class="panel-section">
+                <span class="panel-title">Current Price Data</span>
+                <div class="price-grid" id="priceInfo" style="display: none;">
+                    <div class="price-item-small">
+                        <div class="price-label-small">Open</div>
+                        <div class="price-value-small" id="priceOpen">-</div>
+                    </div>
+                    <div class="price-item-small">
+                        <div class="price-label-small">High</div>
+                        <div class="price-value-small" id="priceHigh">-</div>
+                    </div>
+                    <div class="price-item-small">
+                        <div class="price-label-small">Low</div>
+                        <div class="price-value-small" id="priceLow">-</div>
+                    </div>
+                    <div class="price-item-small">
+                        <div class="price-label-small">Close</div>
+                        <div class="price-value-small" id="priceClose">-</div>
+                    </div>
+                    <div class="price-item-small" style="grid-column: span 2;">
+                        <div class="price-label-small">Volume</div>
+                        <div class="price-value-small" id="priceVolume">-</div>
+                    </div>
+                </div>
+            </div>
 
+            <div class="panel-section">
+                <span class="panel-title">Information</span>
+                <div class="info-card">
+                    <div class="info-card-label">Total History</div>
+                    <div class="info-card-value">{{ total_candles }} candles available</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-label">Last Updated</div>
+                    <div class="info-card-value" id="lastUpdatedTS">{{ last_candle }}</div>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <span class="panel-title">Controls</span>
+                <div class="controls-panel">
+                    <div class="control-group">
+                        <label for="candleCount">Visible Candles</label>
+                        <select id="candleCount" onchange="loadChart()">
+                            <option value="50">50</option>
+                            <option value="100" selected>100</option>
+                            <option value="200">200</option>
+                            <option value="500">500</option>
+                            <option value="1000">1000</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="nnThreshold">NN Confidence: <span id="thresholdValue">5%</span></label>
+                        <input type="range" id="nnThreshold" min="1" max="99" value="5"
+                            oninput="updateThresholdDisplay(this.value)" onchange="loadChart()"
+                            style="width: 100%; accent-color: #00f2fe;">
+                        <div
+                            style="display: flex; justify-content: space-between; font-size: 0.7em; color: #666; margin-top: 2px;">
+                            <span>More Patterns</span>
+                            <span>High Precision</span>
+                        </div>
+                    </div>
+                    <button class="refresh-btn" onclick="refreshChart(true)">🔄 Force Re-sync</button>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <span class="panel-title">Tips</span>
+                <p style="font-size: 0.84em; color: #888; line-height: 1.5;">
+                    ✨ <b>Zoom:</b> Drag on chart<br>
+                    ✨ <b>Pan:</b> Shift + Drag<br>
+                    ✨ <b>Reset:</b> Double-click
+                </p>
+            </div>
+        </aside>
     </div>
 
     <script>
@@ -391,6 +474,23 @@
 
         function goBack() {
             window.location.href = '/';
+        }
+
+        function toggleDashboard() {
+            const panel = document.getElementById('sidePanel');
+            panel.classList.toggle('hidden');
+
+            // Resize chart after transition to ensure it fills new width
+            setTimeout(() => {
+                const chartDiv = document.getElementById('chart');
+                if (chartDiv && typeof Plotly !== 'undefined') {
+                    Plotly.Plots.resize(chartDiv);
+                }
+            }, 350);
+        }
+
+        function updateThresholdDisplay(value) {
+            document.getElementById('thresholdValue').textContent = value + '%';
         }
 
         async function loadLatestPrice() {
@@ -416,20 +516,21 @@
         async function loadChart(startDate = null, endDate = null) {
             const chartDiv = document.getElementById('chart');
             // Only show full loading spinner if it's the initial load
-            if (!startDate && !endDate) {
-                chartDiv.innerHTML = '<div class="loading"><div class="spinner"></div><div>Loading interactive chart...</div></div>';
-            }
+            // if (!startDate && !endDate) {
+            //    chartDiv.innerHTML = '<div class="loading"><div class="spinner"></div><div>Loading interactive chart...</div></div>';
+            // }
 
             try {
                 let url = `/api/chart/${symbol}/${timeframe}`;
+                const nnThreshold = document.getElementById('nnThreshold').value;
 
                 if (startDate && endDate) {
                     // Add buffer to request to allow for some panning without immediately hitting edge
                     // But for now, strictly enabling requested range + small buffer is safer
-                    url += `?start=${startDate}&end=${endDate}`;
+                    url += `?start=${startDate}&end=${endDate}&nn_threshold=${nnThreshold}`;
                 } else {
                     const candleCount = document.getElementById('candleCount').value;
-                    url += `?candles=${candleCount}`;
+                    url += `?candles=${candleCount}&nn_threshold=${nnThreshold}`;
                 }
 
                 const response = await fetch(url);
@@ -477,11 +578,11 @@
                 // Render the Plotly chart
                 Plotly.react('chart', chartData.data, chartData.layout, {
                     responsive: true,
-                    displayModeBar: true,
-                    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+                    displayModeBar: false,
                     displaylogo: false,
                     scrollZoom: true
                 });
+
 
                 chartDiv.removeAllListeners('plotly_relayout');
                 chartDiv.on('plotly_relayout', handleRelayout);

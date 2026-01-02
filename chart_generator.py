@@ -22,36 +22,7 @@ def calculate_stochastic(df, period_k, smooth_k, smooth_d):
     d_percent = k_percent.rolling(window=smooth_d, min_periods=1).mean()
     return d_percent
 
-def calculate_linear_regression_channel(df, window=20):
-    """Calculate Linear Regression Channel for trend context"""
-    df['linreg_mid'] = np.nan
-    df['linreg_top'] = np.nan
-    df['linreg_bot'] = np.nan
-    df['slope'] = np.nan
-    
-    # We can optimize this loop later, but for 1H candles (typ. < 1000) it's fast enough
-    # If using full history, iterating standard Python loop might be slow. 
-    # Let's try to keep it efficient. 
-    # For now, stick to the logic provided in the reference file.
-    
-    for i in range(window, len(df)):
-        # Compute LinReg for Channel (Local window)
-        y = df['close'].iloc[i-window:i]
-        x = np.arange(window)
-        slope, intercept, _, _, _ = linregress(x, y)
-        
-        # Store Channel Values
-        current_mid = slope * (window - 1) + intercept
-        std_dev = y.std()
-        
-        # Update DataFrame
-        # Using .iat is faster than .loc/iloc for single value updates
-        df.iat[i, df.columns.get_loc('linreg_mid')] = current_mid
-        df.iat[i, df.columns.get_loc('linreg_top')] = current_mid + (2.0 * std_dev)
-        df.iat[i, df.columns.get_loc('linreg_bot')] = current_mid - (2.0 * std_dev)
-        df.iat[i, df.columns.get_loc('slope')] = slope
-    
-    return df
+# Pivot-based channel logic is now below
 
 # -------------------------------------------------------------------------
 # NEURAL NETWORK PATTERN DETECTION (RTX 5090 Optimized Inference)
@@ -88,12 +59,14 @@ class PatternDetectorCNN(nn.Module):
         return self.classifier(x)
 
 _NN_MODEL = None
+_NN_CACHE = {}  # Cache for NN detection results: {(filepath, data_len, threshold): results}
+
 def get_nn_model():
     global _NN_MODEL
     if _NN_MODEL is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = PatternDetectorCNN()
-        model_path = os.path.join(os.path.dirname(__file__), "stoch_w_detector_5090.pth")
+        model_path = os.path.join(os.path.dirname(__file__), "stoch_low_detector_5090.pth")
         if os.path.exists(model_path):
             try:
                 state_dict = torch.load(model_path, map_location=device, weights_only=True)
@@ -107,18 +80,28 @@ def get_nn_model():
                 print(f"Error loading NN Model: {e}")
     return _NN_MODEL
 
-def identify_nn_patterns(df):
-    """Detects 'W' patterns using the trained Neural Network"""
+def identify_nn_patterns(df, nn_threshold=85):
+    """Detects 'W' patterns using the trained Neural Network
+    
+    Args:
+        nn_threshold: Confidence threshold (0-100), default 85
+    """
     model = get_nn_model()
     if model is None:
         df['nn_alarm'] = False
         return df
 
     device = next(model.parameters()).device
-    if 'stoch_60_10' not in df.columns:
-         df['stoch_60_10'] = calculate_stochastic(df, 60, 10, 10)
     
-    stoch_vals = (df['stoch_60_10'].values / 100.0)
+    # Calculate stochastic the SAME WAY as training script (single smoothing, not double)
+    # Training uses: stoch.rolling(smooth_k).mean() / 100.0
+    # NOT the double-smoothed version from calculate_stochastic()
+    period_k = 60
+    smooth_k = 10
+    low_min = df['low'].rolling(window=period_k).min()
+    high_max = df['high'].rolling(window=period_k).max()
+    stoch = 100 * ((df['close'] - low_min) / (high_max - low_min))
+    stoch_vals = (stoch.rolling(window=smooth_k).mean() / 100.0).values
     nn_results = np.zeros(len(df), dtype=bool)
     
     window_size = 100
@@ -140,12 +123,256 @@ def identify_nn_patterns(df):
                 x_tensor = torch.FloatTensor(np.array(windows)).unsqueeze(1).to(device)
                 logits = model(x_tensor)
                 probs = torch.sigmoid(logits).cpu().numpy().flatten()
-                nn_results[valid_indices] = probs > 0.85 # Confidence threshold
+                
+                # --- AGGRESSIVE SUPPRESSION LOGIC (NMS) ---
+                # Use dynamic threshold from parameter
+                threshold = nn_threshold / 100.0  # Convert from percentage to 0-1
+                temp_results = probs > threshold
+                
+                # 2. Local Peak Detection / Cooldown (30 bars ~ 7.5 hours)
+                final_results = np.zeros_like(probs, dtype=bool)
+                cooldown = 30  # Reduced from 60 to allow more detections
+                for idx in range(len(probs)):
+                    if probs[idx] > threshold:
+                        # Check if this is the maximum in [idx-cooldown, idx+cooldown]
+                        start = max(0, idx - cooldown)
+                        end = min(len(probs), idx + cooldown)
+                        if probs[idx] == np.max(probs[start:end]):
+                            final_results[idx] = True
+                
+                nn_results[valid_indices] = final_results
+                
+                # Debug: Print detection stats and top scores
+                detected_count = np.sum(final_results)
+                if detected_count > 0:
+                    print(f"NN Stochastic Low Detection: Found {detected_count} patterns (threshold={nn_threshold}%)")
+                
+                # Show top 5 confidence scores to help tune threshold
+                if len(probs) > 0:
+                    top_indices = np.argsort(probs)[-5:][::-1]  # Top 5 highest scores
+                    print(f"Top 5 NN confidence scores:")
+                    for idx in top_indices:
+                        actual_idx = valid_indices[idx]
+                        timestamp = df.index[actual_idx]
+                        print(f"  - {timestamp}: {probs[idx]*100:.1f}% confidence")
                 
     df['nn_alarm'] = nn_results
     return df
 
-def identify_quad_rotation_alarms(df):
+def is_pivot(df, candle, window):
+    """Detects if a candle is a pivot point (fractal)."""
+    if candle - window < 0 or candle + window >= len(df):
+        return 0
+    
+    pivot_high = 1
+    pivot_low = 2
+    for i in range(candle - window, candle + window + 1):
+        if df['low'].iloc[candle] > df['low'].iloc[i]:
+            pivot_low = 0
+        if df['high'].iloc[candle] < df['high'].iloc[i]:
+            pivot_high = 0
+    
+    if pivot_high and pivot_low: return 3
+    if pivot_high: return 1
+    if pivot_low: return 2
+    return 0
+
+def calculate_classic_channel(df, window=1, backcandles=35):
+    """
+    Calculates an ultra-sensitive parallel downward channel using pivot points.
+    1. Finds pivot HIGHS (window=1) and fits a resistance line (slope).
+    2. Defines a parallel support line touching the lowest low in the window.
+    3. Optimized for capturing FULL steep descents (30-40 bars).
+    """
+    df['linreg_mid'] = np.nan
+    df['linreg_top'] = np.nan
+    df['linreg_bot'] = np.nan
+    df['slope'] = np.nan
+    
+    l_mid = np.full(len(df), np.nan)
+    l_top = np.full(len(df), np.nan)
+    l_bot = np.full(len(df), np.nan)
+    slopes = np.full(len(df), np.nan)
+    
+    # Vectorized Pivot Detection for HIGHS (Resistance)
+    w_size = 2 * window + 1
+    roll_high = df['high'].rolling(window=w_size, center=True).max()
+    is_p_high = (df['high'] == roll_high).values
+    
+    low_vals = df['low'].values
+    high_vals = df['high'].values
+    indices = np.arange(len(df))
+    
+    for i in range(backcandles + window, len(df)):
+        start = i - backcandles - window
+        end = i - window
+        mask_h = is_p_high[start:end]
+        idx_p_high = indices[start:end][mask_h]
+        vals_p_high = high_vals[start:end][mask_h]
+        
+        if len(idx_p_high) >= 2:
+            try:
+                # Resistance line (top) - derivation from local extreme highs
+                slope, intercept, _, _, _ = linregress(idx_p_high, vals_p_high)
+                
+                # Downward slope only
+                if slope < 0:
+                    cur_top = slope * i + intercept
+                    
+                    # Parallel bottom line offset by min price distance in lookback
+                    win_indices = np.arange(start, i)
+                    baselines = slope * win_indices + intercept
+                    offset = np.min(low_vals[start:i] - baselines)
+                    
+                    l_top[i] = cur_top
+                    l_bot[i] = cur_top + offset
+                    l_mid[i] = cur_top + (offset / 2)
+                    slopes[i] = slope
+            except: continue
+
+    df['linreg_mid'] = l_mid
+    df['linreg_top'] = l_top
+    df['linreg_bot'] = l_bot
+    df['slope'] = slopes
+    return df
+
+def detect_channel_breakout(df):
+    """Detects when price breaks above the parallel classic channel top"""
+    if 'linreg_top' not in df.columns or 'slope' not in df.columns:
+        return pd.Series([False] * len(df), index=df.index)
+    
+    # Breakout criteria:
+    # 1. Slope is negative (Down channel)
+    # 2. Close is above the top of the channel
+    # 3. Previous close was below/inside
+    is_downtrend = df['slope'] < 0  # Classic channel slope is more sensitive
+    is_above_top = df['close'] > df['linreg_top']
+    was_below_top = df['close'].shift(1) <= df['linreg_top'].shift(1)
+    
+    return is_downtrend & is_above_top & was_below_top
+
+def identify_hybrid_signals(df, nn_threshold=85):
+    """
+    Combines Classic Channel Breakouts with NN 'W' confirmation.
+    Logic: Channel Establishment -> Breakout -> shallow W + Low Stochs.
+    """
+    if 'nn_alarm' not in df.columns:
+        df = identify_nn_patterns(df, nn_threshold=nn_threshold)
+    
+    # Pre-calculate breakouts
+    breakout_series = detect_channel_breakout(df)
+    
+    hybrid_signals = np.zeros(len(df), dtype=bool)
+    
+    # We now trigger on the BREAKOUT point if a 'W' was formed recently as confirmation.
+    breakout_indices = df.index[breakout_series]
+    
+    for br_time in breakout_indices:
+        # Look back for a 'W' confirmation in the last 20 candles
+        start_search = br_time - pd.Timedelta(minutes=15 * 20)
+        nn_in_window = df.loc[start_search:br_time, 'nn_alarm']
+        
+        if nn_in_window.any():
+            # Found a 'W' followed by a breakout!
+            # We must also check if stochastics were LOW ( < 40 ) at the time of the 'W'
+            nn_times = nn_in_window.index[nn_in_window]
+            for nn_time in nn_times:
+                s_low = (df.loc[nn_time, 'stoch_60_10'] < 40) and (df.loc[nn_time, 'stoch_40_4'] < 40)
+                if s_low:
+                    hybrid_signals[df.index == br_time] = True
+                    break
+
+    df['hybrid_alarm'] = hybrid_signals
+    return df
+
+def identify_quad_rotation_alarms(df, nn_threshold=85):
+    """
+    Main aggregator: Calculates stochastics, classic channel, and identifies hybrid signals.
+    Uses caching to avoid redundant NN detection on unchanged data.
+    """
+    global _NN_CACHE
+    
+    # Create cache key based on data fingerprint
+    cache_key = (len(df), str(df.index[-1]) if len(df) > 0 else '', nn_threshold)
+    
+    # Check if we have cached results for this exact data
+    if cache_key in _NN_CACHE:
+        cached_df = _NN_CACHE[cache_key]
+        # Verify cache is still valid (same index)
+        if len(cached_df) == len(df) and (cached_df.index == df.index).all():
+            print(f"[CACHE HIT] Using cached NN detection results (threshold={nn_threshold}%)")
+            # Copy cached columns to current df
+            for col in ['nn_alarm', 'hybrid_alarm', 'alarm', 'stoch_9_3', 'stoch_14_3', 'stoch_40_4', 'stoch_60_10', 'slope']:
+                if col in cached_df.columns:
+                    df[col] = cached_df[col]
+            return df
+    
+    print(f"[CACHE MISS] Running full detection (threshold={nn_threshold}%)")
+    
+    # Calculate stochastics
+    df['stoch_9_3'] = calculate_stochastic(df, 9, 1, 3)
+    df['stoch_14_3'] = calculate_stochastic(df, 14, 1, 3)
+    df['stoch_40_4'] = calculate_stochastic(df, 40, 1, 4)
+    df['stoch_60_10'] = calculate_stochastic(df, 60, 10, 10)
+
+    # Calculate Classic Price Channel (two lows + parallel shift)
+    df = calculate_classic_channel(df)
+    
+    # Identify Quad Alarms (Old rule-based logic for comparison)
+    cond_downtrend = df['slope'] < -0.5
+    cond_quad_low = (df['stoch_9_3'] < 20) & (df['stoch_14_3'] < 25) & (df['stoch_40_4'] < 25) & (df['stoch_60_10'] < 25)
+    cond_turn_up = df['stoch_9_3'] > df['stoch_9_3'].shift(1)
+    df['alarm'] = cond_downtrend & cond_quad_low & cond_turn_up
+    
+    # Identify Hybrid Signals (New high-conviction logic)
+    df = identify_hybrid_signals(df, nn_threshold=nn_threshold)
+    
+    # Cache the results
+    _NN_CACHE[cache_key] = df.copy()
+    
+    # Limit cache size to prevent memory issues (keep last 10 unique datasets)
+    if len(_NN_CACHE) > 10:
+        # Remove oldest entry
+        oldest_key = next(iter(_NN_CACHE))
+        del _NN_CACHE[oldest_key]
+        print(f"[CACHE] Evicted oldest entry, cache size: {len(_NN_CACHE)}")
+    
+    return df
+
+def calculate_linear_regression_channel(df, window=40):
+    """Calculate Linear Regression Channel for trend context (optimized for macro trends)"""
+    df['linreg_mid'] = np.nan
+    df['linreg_top'] = np.nan
+    df['linreg_bot'] = np.nan
+    df['slope'] = np.nan
+    
+    # Pre-calculate to avoid constant lookup
+    closes = df['close'].values
+    l_mid = np.full(len(df), np.nan)
+    l_top = np.full(len(df), np.nan)
+    l_bot = np.full(len(df), np.nan)
+    slopes = np.full(len(df), np.nan)
+    
+    x = np.arange(window)
+    for i in range(window, len(df)):
+        y = closes[i-window:i]
+        # Standard OLS
+        slope, intercept, _, _, _ = linregress(x, y)
+        current_mid = slope * (window - 1) + intercept
+        std_dev = np.std(y)
+        
+        l_mid[i] = current_mid
+        l_top[i] = current_mid + (2.0 * std_dev)
+        l_bot[i] = current_mid - (2.0 * std_dev)
+        slopes[i] = slope
+        
+    df['linreg_mid'] = l_mid
+    df['linreg_top'] = l_top
+    df['linreg_bot'] = l_bot
+    df['slope'] = slopes
+    return df
+
+def identify_quad_rotation_alarms(df, nn_threshold=85):
     """
     Calculates 4 Stochastics, LinReg Channel, and identifies Quad Rotation Alarms.
     Returns the dataframe with an 'alarm' column.
@@ -156,8 +383,8 @@ def identify_quad_rotation_alarms(df):
     df['stoch_40_4'] = calculate_stochastic(df, 40, 1, 4)
     df['stoch_60_10'] = calculate_stochastic(df, 60, 10, 10)
 
-    # Calculate Linear Regression Channel
-    df = calculate_linear_regression_channel(df, window=20)
+    # Calculate Linear Regression Channel (Trend Context)
+    df = calculate_linear_regression_channel(df, window=40)
     
     # Identify Alarms (Vectorized)
     # Condition A: Downward Channel (Slope < -0.5)
@@ -169,15 +396,18 @@ def identify_quad_rotation_alarms(df):
     
     df['alarm'] = cond_downtrend & cond_quad_low & cond_turn_up
     
-    # NN Pattern Detection Integration
-    df = identify_nn_patterns(df)
+    # Hybrid Pattern Detection (Breakout + NN W)
+    df = identify_hybrid_signals(df, nn_threshold=nn_threshold)
     
     return df
 
-def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date=None, end_date=None):
+def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date=None, end_date=None, nn_threshold=85):
     """
     Generate interactive OHLC chart data with stochastics using Plotly
     Returns JSON data for Plotly chart
+    
+    Args:
+        nn_threshold: Neural network confidence threshold (0-100), default 85
     """
     # Read data
     df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
@@ -200,7 +430,7 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
     df = df.iloc[process_start_index:].copy()
 
     # Calculate Indicators and Alarms on Working dataset
-    df = identify_quad_rotation_alarms(df)
+    df = identify_quad_rotation_alarms(df, nn_threshold=nn_threshold)
 
     # -------------------------------------------------------------------------
     # Cross-Timeframe Logic (Show 1H Alarms on 15M Chart)
@@ -280,16 +510,8 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
     fig = make_subplots(
         rows=6, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.02,
-        row_heights=[0.4, 0.1, 0.125, 0.125, 0.125, 0.125],
-        subplot_titles=(
-            f'{symbol} - {timeframe.upper()}',
-            'Volume',
-            'Stochastic (9,3)',
-            'Stochastic (14,3)',
-            'Stochastic (40,4)',
-            'Stochastic (60,10)'
-        )
+        vertical_spacing=0.015,
+        row_heights=[0.40, 0.08, 0.10, 0.10, 0.10, 0.10],
     )
 
     # Add candlestick chart
@@ -304,46 +526,20 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
             increasing_line_color='#26a69a',
             decreasing_line_color='#ef5350',
             increasing_fillcolor='#26a69a',
-            decreasing_fillcolor='#ef5350'
+            decreasing_fillcolor='#ef5350',
+            line=dict(width=1),
+            whiskerwidth=0.5
         ),
         row=1, col=1
     )
     
-    # Add Linear Regression Channel
-    fig.add_trace(
-        go.Scatter(
-            x=chart_df.index.strftime('%Y-%m-%dT%H:%M:%S'),
-            y=chart_df['linreg_top'].tolist(),
-            name='LinReg Top',
-            line=dict(color='teal', width=1),
-            hoverinfo='skip',
-            showlegend=False
-        ),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=chart_df.index.strftime('%Y-%m-%dT%H:%M:%S'),
-            y=chart_df['linreg_bot'].tolist(),
-            name='LinReg Bot',
-            line=dict(color='teal', width=1),
-            hoverinfo='skip',
-            showlegend=False
-        ),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=chart_df.index.strftime('%Y-%m-%dT%H:%M:%S'),
-            y=chart_df['linreg_mid'].tolist(),
-            name='LinReg Mid',
-            line=dict(color='teal', width=1, dash='dash'),
-            hoverinfo='skip',
-            showlegend=False
-        ),
-        row=1, col=1
-    )
 
+
+    # Calculate dynamic marker offset based on visible price range
+    # This ensures markers are always visible regardless of price level
+    price_range = chart_df['high'].max() - chart_df['low'].min()
+    marker_offset = price_range * 0.015  # 1.5% of visible range
+    
     # Add Alarm Markers (Current Timeframe)
     alarm_df = chart_df[chart_df['alarm']].copy()
     print(f"DEBUG: Found {len(alarm_df)} alarms in current view")
@@ -357,7 +553,7 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
         fig.add_trace(
             go.Scatter(
                 x=alarm_df.index.strftime('%Y-%m-%dT%H:%M:%S'),
-                y=(alarm_df['low'] * 0.99).tolist(), # Place slightly below candle
+                y=(alarm_df['low'] - marker_offset).tolist(), # Place just below candle low
                 mode='markers',
                 marker=dict(symbol='triangle-up', size=12, color=alarm_color),
                 name=f'Quad Rotation Alarm (Timescale: {timeframe})',
@@ -373,7 +569,7 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
          fig.add_trace(
             go.Scatter(
                 x=df_1h_alarms.index.strftime('%Y-%m-%dT%H:%M:%S'),
-                y=(df_1h_alarms['low'] * 0.98).tolist(), 
+                y=(df_1h_alarms['low'] - marker_offset * 1.5).tolist(), # Place slightly lower than current TF
                 mode='markers',
                 marker=dict(symbol='triangle-up', size=16, color='cyan'),
                 name='Quad Rotation Alarm (Timescale: 1H)',
@@ -437,30 +633,81 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
                 row=1, col=1
             )
 
-    # -------------------------------------------------------------------------
-    # Add NN 'W' Pattern Markers (Deep Learning)
-    # -------------------------------------------------------------------------
+    # Add Neural Network detected 'W' patterns
     if 'nn_alarm' in chart_df.columns:
-        nn_alarm_df = chart_df[chart_df['nn_alarm']].copy()
-        if not nn_alarm_df.empty:
+        nn_df = chart_df[chart_df['nn_alarm'] & (~chart_df.get('hybrid_alarm', False))].copy()
+        if not nn_df.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=nn_alarm_df.index.strftime('%Y-%m-%dT%H:%M:%S'),
-                    y=(nn_alarm_df['low'] * 0.97).tolist(), # Slightly lower than triangles
+                    x=nn_df.index.strftime('%Y-%m-%dT%H:%M:%S'),
+                    y=(nn_df['low'] - marker_offset * 2).tolist(), # Place below candle low
                     mode='markers',
-                    marker=dict(
-                        symbol='star', 
-                        size=14, 
-                        color='#00FF00', 
-                        line=dict(width=1, color='white')
-                    ),
-                    name='Neural Network: W-Pattern Detected',
+                    marker=dict(symbol='star', size=10, color='#4A90E2', line=dict(width=1, color='white')),
+                    name='Neural Network: W-Pattern (Unconfirmed)',
                     hoverinfo='x+y+name'
                 ),
                 row=1, col=1
             )
 
-    # Add volume bars
+    # -------------------------------------------------------------------------
+    # Add Hybrid Alarms (Trend Breakout + NN W)
+    # -------------------------------------------------------------------------
+    if 'hybrid_alarm' in chart_df.columns:
+        hybrid_df = chart_df[chart_df['hybrid_alarm']].copy()
+        if not hybrid_df.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=hybrid_df.index.strftime('%Y-%m-%dT%H:%M:%S'),
+                    y=(hybrid_df['low'] - marker_offset * 2.5).tolist(), # Place below candle low
+                    mode='markers',
+                    marker=dict(
+                        symbol='star', 
+                        size=18, 
+                        color='#00FF00', # Vibrand Green for confirmed
+                        line=dict(width=2, color='white')
+                    ),
+                    name='👑 HYBRID SIGNAL: Trend Break + W-Confirmation',
+                    hoverinfo='x+y+name'
+                ),
+                row=1, col=1
+            )
+
+    # -------------------------------------------------------------------------
+    # Volume Profile Visualization
+    # -------------------------------------------------------------------------
+    try:
+        from volume_profile import calculate_volume_profile
+        
+        # Calculate volume profile for visible chart range
+        vp_data = calculate_volume_profile(chart_df, num_bins=80)
+        
+        if vp_data is not None:
+            # Add Volume Profile as horizontal bars on a secondary x-axis (Side-by-Side)
+            fig.add_trace(
+                go.Bar(
+                    y=vp_data['bin_centers'],
+                    x=vp_data['profile'].values,
+                    orientation='h',
+                    marker=dict(color='cyan', opacity=0.3, line=dict(width=0)),
+                    name='Volume Profile',
+                    showlegend=False,
+                    xaxis='x2',
+                    yaxis='y',
+                    hoverinfo='x+y'
+                ),
+                row=1, col=1
+            )
+            
+            # Note: We removed the horizontal lines for POC/VAH/VAL as they were cluttering the view.
+            # The profile bars themselves give a better visual representation.
+            
+    except ImportError:
+        print("Warning: volume_profile module not found, skipping VP visualization")
+    except Exception as e:
+        print(f"Warning: Could not add volume profile visualization: {e}")
+
+
+    # Add volume bars (standard volume at bottom)
     colors = ['#26a69a' if chart_df['close'].iloc[i] >= chart_df['open'].iloc[i] else '#ef5350'
               for i in range(len(chart_df))]
 
@@ -509,20 +756,33 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
         # Set y-axis range for stochastics
         fig.update_yaxes(range=[0, 100], row=config['row'], col=1)
 
-    # Update layout for dark theme
+    # Update layout for dark theme with SIDE-BY-SIDE Volume Profile
     fig.update_layout(
         template='plotly_dark',
-        height=1000,
+        autosize=True,
         showlegend=False,
         xaxis_rangeslider_visible=False,
-        hovermode='x unified',
+        hovermode='x',
         paper_bgcolor='#0f0c29',
         plot_bgcolor='#1a1a2e',
         font=dict(color='white', size=12),
-
-        margin=dict(l=50, r=50, t=80, b=50),
+        margin=dict(l=40, r=40, t=10, b=70),
         dragmode='pan',
-        uirevision='no_reset'
+        uirevision='no_reset',
+        hoverdistance=-1,
+        spikedistance=-1,
+        
+        # Define layouts for axes to create side-by-side effect
+        xaxis=dict(
+            domain=[0, 0.85], # Main chart takes 85% width
+            anchor='y'
+        ),
+        xaxis2=dict(
+            domain=[0.86, 1.0], # Volume Profile takes right 14%
+            anchor='y',
+            showticklabels=False,
+            visible=True
+        )
     )
 
     # Update all x-axes
@@ -534,18 +794,16 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
         showspikes=True,
         spikemode='across',
         spikesnap='cursor',
-        spikecolor='rgba(255, 255, 255, 0.5)',
+        spikecolor='rgba(255, 255, 255, 0.8)',
         spikethickness=1,
-        spikedash='dash'
+        spikedash='solid',
+        rangeslider_visible=False,
+        type='date'
     )
+    
+    # Explicitly enable tick labels on the bottom row (row 6)
+    fig.update_xaxes(showticklabels=True, row=6, col=1)
 
-    # Update all y-axes
-    fig.update_yaxes(
-        showgrid=True,
-        gridcolor='#333333',
-        gridwidth=0.5,
-        color='white'
-    )
 
     # Enable auto-range for price chart (row 1) and volume (row 2)
     fig.update_yaxes(
@@ -557,14 +815,9 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
     fig.update_yaxes(
         autorange=True,
         fixedrange=False,
+        rangemode='tozero',
         row=2, col=1
     )  # Volume - auto scale
-
-    # Ensure x-axis shows all data
-    fig.update_xaxes(
-        rangeslider_visible=False,
-        type='date'
-    )
 
     # Return as JSON
     return fig.to_json()

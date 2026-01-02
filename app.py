@@ -113,9 +113,12 @@ def get_chart_data(symbol, timeframe):
         # Get date range parameters
         start_date = request.args.get('start')
         end_date = request.args.get('end')
+        
+        # Get NN threshold parameter (default 5 - lowered to show more signals)
+        nn_threshold = request.args.get('nn_threshold', 5, type=int)
 
         # Generate chart data as JSON
-        chart_json = generate_chart_data(filepath, symbol, timeframe, num_candles, start_date, end_date)
+        chart_json = generate_chart_data(filepath, symbol, timeframe, num_candles, start_date, end_date, nn_threshold)
 
         # Return raw JSON string with correct content type
         from flask import Response
@@ -194,8 +197,8 @@ def background_update_task():
         except Exception as e:
             print(f"[{datetime.now()}] Error in background update: {e}")
 
-        # Wait 1 minute before next update
-        time.sleep(60)
+        # Wait 15 minutes before next update
+        time.sleep(900)  # 15 minutes = 900 seconds
 
 if __name__ == '__main__':
     # Start background update task
@@ -206,4 +209,6 @@ if __name__ == '__main__':
     scan_data_directory()
 
     # Run Flask app
+    # Set reloader type to 'watchdog' to avoid watching site-packages
+    os.environ['FLASK_RUN_RELOAD_TYPE'] = 'watchdog'
     app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=True)

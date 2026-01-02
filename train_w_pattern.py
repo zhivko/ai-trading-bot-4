@@ -5,36 +5,34 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
-from tqdm import tqdm
+from sklearn.linear_model import LinearRegression
 import os
 import matplotlib.pyplot as plt
 import time
+from tqdm import tqdm
 
 # -------------------------------------------------------------------------
-# 1. MODEL ARCHITECTURE (RTX 5090 Optimized)
+# 1. MODEL ARCHITECTURE (RTX 5090 / Blackwell Optimized)
 # -------------------------------------------------------------------------
 class PatternDetectorCNN(nn.Module):
     def __init__(self, window_size=100):
         super(PatternDetectorCNN, self).__init__()
-        # Deeper architecture for Blackwell architecture benefit
+        # Input channels = 1 (Stochastic)
         self.features = nn.Sequential(
-            # First block: Wide local feature detection
             nn.Conv1d(1, 128, kernel_size=11, stride=1, padding=5),
             nn.BatchNorm1d(128),
             nn.LeakyReLU(0.2),
-            nn.MaxPool1d(2), # -> 50
+            nn.MaxPool1d(2),
             
-            # Second block
             nn.Conv1d(128, 256, kernel_size=7, stride=1, padding=3),
             nn.BatchNorm1d(256),
             nn.LeakyReLU(0.2),
-            nn.MaxPool1d(2), # -> 25
+            nn.MaxPool1d(2),
             
-            # Third block
             nn.Conv1d(256, 512, kernel_size=5, stride=1, padding=2),
             nn.BatchNorm1d(512),
             nn.LeakyReLU(0.2),
-            nn.AdaptiveAvgPool1d(16) # -> 16 global features per filter
+            nn.AdaptiveAvgPool1d(16) 
         )
         
         self.classifier = nn.Sequential(
@@ -44,7 +42,6 @@ class PatternDetectorCNN(nn.Module):
             nn.Linear(1024, 256),
             nn.ReLU(),
             nn.Linear(256, 1)
-            # Sigmoid removed for BCEWithLogitsLoss integration
         )
 
     def forward(self, x):
@@ -53,175 +50,156 @@ class PatternDetectorCNN(nn.Module):
         return self.classifier(x)
 
 # -------------------------------------------------------------------------
-# 2. DATA PREPARATION
+# 2. DATA ENGINEERING & QUANTITATIVE CHANNEL DETECTION
 # -------------------------------------------------------------------------
-def prepare_training_data(filepath, window_size=100):
-    print(f"Loading data from {filepath}...")
-    df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+def calculate_stochastic(df, period_k=14, smooth_k=3):
+    low_min = df['low'].rolling(window=period_k).min()
+    high_max = df['high'].rolling(window=period_k).max()
+    stoch = 100 * ((df['close'] - low_min) / (high_max - low_min))
+    return stoch.rolling(window=smooth_k).mean() / 100.0
+
+def calculate_atr(df, period=14):
+    high_low = df['high'] - df['low']
+    high_cp = np.abs(df['high'] - df['close'].shift())
+    low_cp = np.abs(df['low'] - df['close'].shift())
+    tr = pd.concat([high_low, high_cp, low_cp], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+def get_channel_metrics(prices):
+    """Returns slope and R-squared to define the 'Quality' of a downtrend."""
+    y = prices.values.reshape(-1, 1)
+    x = np.arange(len(y)).reshape(-1, 1)
+    model = LinearRegression().fit(x, y)
+    return model.coef_[0][0], model.score(x, y)
+
+def prepare_data(path_1h, window_size=100, lookforward=24):
+    print(f"Loading and processing data...")
+    df = pd.read_csv(path_1h, index_col='timestamp', parse_dates=True)
     
-    # Calculate Stoch 60,10
-    low_min = df['low'].rolling(window=60, min_periods=1).min()
-    high_max = df['high'].rolling(window=60, min_periods=1).max()
-    k_percent = 100 * ((df['close'] - low_min) / (high_max - low_min))
-    stoch = k_percent.rolling(window=10, min_periods=1).mean()
+    # Technical Indicators
+    df['stoch_long'] = calculate_stochastic(df, 60, 10) # 1H "Slow"
+    df['stoch_short'] = calculate_stochastic(df, 14, 3)  # 1H "Fast"
+    df['atr'] = calculate_atr(df)
     
-    stoch = stoch / 100.0 # Normalize 0-1
-    values = stoch.values
+    # Volatility Adjustment: Higher ATR increases our 'low' threshold
+    df['atr_ratio'] = df['atr'] / df['atr'].rolling(200).mean()
+    df['dynamic_low'] = (0.20 * df['atr_ratio']).clip(0.15, 0.35)
     
-    data_x = []
-    data_y = []
+    data_x, data_y = [], []
     
-    print("Generating windows and labels...")
-    # Slicing is faster than looping for dataset generation
-    # Pre-calculating indices that match 'W' criteria
-    for i in range(window_size, len(values)):
-        window = values[i-window_size:i]
-        if np.isnan(window).any():
-            continue
-            
-        # --- REFINED HEURISTIC: "Shallow W near 20" ---
-        # 1. Deep bottoms (around 15-25)
-        # 2. Low amplitude peak (doesn't shoot to 80)
-        # 3. Small breakout
+    for i in tqdm(range(window_size, len(df) - lookforward)):
+        # 1. Extract Window for CNN
+        win_long = df['stoch_long'].iloc[i-window_size:i].values
+        win_short = df['stoch_short'].iloc[i-window_size:i].values
         
-        q2 = window[25:50]
-        q3 = window[50:75]
-        q4 = window[75:100]
+        if np.isnan(win_long).any() or np.isnan(win_short).any(): continue
+
+        # 2. Downtrend Channel Logic
+        price_window = df['close'].iloc[i-window_size:i]
+        slope, r_sq = get_channel_metrics(price_window)
         
-        q2_min = q2.min()
-        q4_min = q4.min()
-        middle_max = q3.max()
+        # 3. Labeling Logic (The 'Boat Stick' Pattern) - RELAXED CRITERIA
+        # Condition A: In a downtrend (negative slope + reasonable fit)
+        # Condition B: Stochastic has been suppressed below dynamic threshold
+        # Condition C: Future price breakout
+        
+        current_threshold = df['dynamic_low'].iloc[i]
+        prolonged_low = np.mean(win_long[-20:] < current_threshold) > 0.6  # Relaxed from 0.8
+        
+        future_return = (df['close'].iloc[i+lookforward] / df['close'].iloc[i]) - 1
         
         label = 0
-        
-        # Criteria:
-        # Both bottoms must be in the "Oversold" zone but not necessarily 0
-        is_near_20 = (q2_min < 0.30) and (q4_min < 0.35) 
-        
-        # Middle peak must be SHALLOW (the "lower amplitude" requirement)
-        # If peak is > 0.5 (50), it's a "Normal" W, not the "Shallow" one the user wants.
-        is_shallow = (middle_max < 0.55) and (middle_max > q2_min) and (middle_max > q4_min)
-        
-        # Amplitude check: The distance between bottom and peak should be modest
-        amplitude = middle_max - min(q2_min, q4_min)
-        is_correct_amplitude = (amplitude > 0.05) and (amplitude < 0.35)
-        
-        if is_near_20 and is_shallow and is_correct_amplitude:
-            # We are currently at the end of the window. 
-            # We want to label the point where the W is confirmed (breaking middle_max)
-            if window[-1] > middle_max and window[-1] < 0.60:
+        if slope < 0 and r_sq > 0.50:  # Relaxed from 0.65 - allows looser downtrends
+            if prolonged_low and future_return > 0.02:  # Relaxed from 0.03 - 2% move
                 label = 1
         
-        data_x.append(window)
+        # Input is (1, WindowSize) - using only long stochastic
+        data_x.append(win_long.reshape(1, -1))
         data_y.append(label)
         
     return np.array(data_x), np.array(data_y)
 
 # -------------------------------------------------------------------------
-# 3. HIGH-PERFORMANCE TRAINING ENGINE
+# 3. TRAINING ENGINE
 # -------------------------------------------------------------------------
-def train_model(X, y):
-    device = torch.device("cuda")
-    print(f"ULTRA TRAINING ON: {torch.cuda.get_device_name(0)}")
-    
-    # Optimization flags
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.allow_tf32 = True # RTX 5090 loves TF32
-    torch.backends.cudnn.allow_tf32 = True
-
-    # Split and Transfer to GPU immediately
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.15, random_state=42)
-    
-    # Load everything to VRAM (only ~200MB, 5090 has 32000MB)
-    X_train = torch.FloatTensor(X_train).unsqueeze(1).to(device)
-    y_train = torch.FloatTensor(y_train).unsqueeze(1).to(device)
-    X_val = torch.FloatTensor(X_val).unsqueeze(1).to(device)
-    y_val = torch.FloatTensor(y_val).unsqueeze(1).to(device)
-    
-    train_ds = TensorDataset(X_train, y_train)
-    # Huge batch size for 5090
-    batch_size = 8192 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    
-    model = PatternDetectorCNN().to(device)
-    
-    # UTILIZE TORCH COMPILE (Requires Triton/OpenMP, might be slow first run but fast later)
-    # try:
-    #     print("Compiling model for Blackwell architecture...")
-    #     model = torch.compile(model)
-    # except Exception as e:
-    #     print(f"Skipping torch.compile: {e}")
-
-    optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.01, 
-                                              steps_per_epoch=len(train_loader), 
-                                              epochs=100)
-    criterion = nn.BCEWithLogitsLoss()
-    scaler = torch.amp.GradScaler('cuda') # Use mixed precision
-
-    epochs = 100
-    print(f"Starting Ultra-Fast Training for {epochs} epochs (Batch Size: {batch_size})...")
-    
-    train_losses = []
-    val_losses = []
-    
-    start_time = time.time()
-    
-    for epoch in range(epochs):
-        model.train()
-        epoch_loss = 0
+class FocalLoss(nn.Module):
+    """Focal Loss to handle extreme class imbalance"""
+    def __init__(self, alpha=0.25, gamma=2.0, pos_weight=None):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.pos_weight = pos_weight
         
-        for batch_x, batch_y in train_loader:
-            optimizer.zero_grad(set_to_none=True) # Optimized zeroing
+    def forward(self, inputs, targets):
+        bce_loss = nn.functional.binary_cross_entropy_with_logits(
+            inputs, targets, pos_weight=self.pos_weight, reduction='none'
+        )
+        probs = torch.sigmoid(inputs)
+        pt = torch.where(targets == 1, probs, 1 - probs)
+        focal_weight = (1 - pt) ** self.gamma
+        
+        if self.alpha is not None:
+            alpha_t = torch.where(targets == 1, self.alpha, 1 - self.alpha)
+            focal_weight = alpha_t * focal_weight
             
-            with torch.amp.autocast('cuda'): # Mixed precision
-                outputs = model(batch_x)
-                loss = criterion(outputs, batch_y)
-            
+        loss = focal_weight * bce_loss
+        return loss.mean()
+
+def train_trading_bot(X, y):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Optimization for Blackwell/5090
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True 
+
+    # Handle Imbalance - Increase weight even more
+    pos_count = sum(y)
+    neg_count = len(y) - pos_count
+    pos_weight_value = (neg_count / pos_count) * 2.0  # 2x multiplier for extra emphasis
+    pos_weight = torch.tensor([pos_weight_value]).to(device)
+    
+    print(f"\nClass Distribution:")
+    print(f"  Positive examples: {pos_count} ({pos_count/len(y)*100:.2f}%)")
+    print(f"  Negative examples: {neg_count} ({neg_count/len(y)*100:.2f}%)")
+    print(f"  Imbalance ratio: 1:{neg_count/pos_count:.1f}")
+    print(f"  Positive class weight: {pos_weight_value:.1f}")
+    
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.15, stratify=y)
+    
+    train_ds = TensorDataset(torch.FloatTensor(X_train).to(device), torch.FloatTensor(y_train).unsqueeze(1).to(device))
+    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True)
+    
+    model = PatternDetectorCNN(window_size=X.shape[2]).to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.05)
+    
+    # Use Focal Loss instead of BCE
+    criterion = FocalLoss(alpha=0.75, gamma=2.0, pos_weight=pos_weight)
+    scaler = torch.amp.GradScaler('cuda')
+
+    print("Starting Training Loop...")
+    for epoch in range(50):
+        model.train()
+        total_loss = 0
+        for b_x, b_y in train_loader:
+            optimizer.zero_grad(set_to_none=True)
+            with torch.amp.autocast('cuda'):
+                pred = model(b_x)
+                loss = criterion(pred, b_y)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-            scheduler.step()
-            
-            epoch_loss += loss.item()
-            
-        # Validation
-        model.eval()
-        with torch.no_grad():
-            with torch.amp.autocast('cuda'):
-                val_out = model(X_val)
-                v_loss = criterion(val_out, y_val)
-            
-        train_losses.append(epoch_loss / len(train_loader))
-        val_losses.append(v_loss.item())
+            total_loss += loss.item()
         
-        if (epoch + 1) % 10 == 0:
-            avg_time = (time.time() - start_time) / (epoch + 1)
-            print(f"Epoch [{epoch+1}/{epochs}] | Loss: {train_losses[-1]:.6f} | Val Loss: {val_losses[-1]:.6f} | {avg_time:.2f}s/epoch")
+        if epoch % 5 == 0:
+            print(f"Epoch {epoch} | Loss: {total_loss/len(train_loader):.4f}")
 
-    total_time = time.time() - start_time
-    print(f"Training Complete in {total_time:.2f} seconds!")
-    
-    # Save the model
-    torch.save(model.state_dict(), "stoch_w_detector_5090.pth")
-    return train_losses, val_losses
+    torch.save(model.state_dict(), "stoch_low_detector_5090.pth")
+    print("Model saved.")
 
 if __name__ == "__main__":
-    data_path = r"c:\git\ai-trading-bot-4\data\BTCUSDT_15m_data.csv"
-    
-    if os.path.exists(data_path):
-        X, y = prepare_training_data(data_path)
-        print(f"Dataset summary: Total={len(X)}, Positives={sum(y)}")
-        
-        train_losses, val_losses = train_model(X, y)
-        
-        plt.figure(figsize=(10, 5))
-        plt.plot(train_losses, label='Train Loss')
-        plt.plot(val_losses, label='Val Loss')
-        plt.yscale('log')
-        plt.title('RTX 5090 Performance (Mixed Precision + Compiled)')
-        plt.legend()
-        plt.savefig('performance_plot.png')
-        print("Model saved as stoch_w_detector_5090.pth")
-    else:
-        print(f"Data not found at {data_path}")
+    # Path to your 1H BTCUSDT Data
+    PATH = "BTCUSDT_1h_data.csv" 
+    if os.path.exists(PATH):
+        X, y = prepare_data(PATH)
+        train_trading_bot(X, y)
