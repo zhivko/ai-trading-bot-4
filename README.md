@@ -2,6 +2,8 @@
 
 A sophisticated cryptocurrency trading bot and market visualization platform that combines deep learning pattern detection with advanced market structure analysis.
 
+![AI Trading Bot Signals](signals.png)
+
 ## 🚀 Key Technologies
 
 ### Backend (Python)
