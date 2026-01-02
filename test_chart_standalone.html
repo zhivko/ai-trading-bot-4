@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Standalone Chart Test</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a2e;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        #chart {
+            width: 100%;
+            height: 1000px;
+            background: #0f0c29;
+            border: 2px solid #00f2fe;
+            border-radius: 10px;
+        }
+        #status {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 5px;
+        }
+        .success { color: #26a69a; }
+        .error { color: #ef5350; }
+    </style>
+</head>
+<body>
+    <h1>Standalone Chart Test</h1>
+    <div id="status">Loading chart data...</div>
+    <div id="chart"></div>
+
+    <script>
+        const status = document.getElementById('status');
+
+        async function loadChart() {
+            try {
+                status.innerHTML = '⏳ Fetching chart data from API...';
+
+                // Fetch chart data from API
+                const response = await fetch('http://localhost:5000/api/chart/BTCUSDT/1h?candles=100');
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const chartData = await response.json();
+
+                status.innerHTML = '⏳ Rendering chart with Plotly...';
+
+                // Render the chart
+                Plotly.newPlot('chart', chartData.data, chartData.layout, {
+                    responsive: true,
+                    displayModeBar: true,
+                    displaylogo: false,
+                    scrollZoom: true
+                });
+
+                status.innerHTML = '<span class="success">✅ Chart loaded successfully!</span>';
+                status.innerHTML += `<br>Data traces: ${chartData.data.length}`;
+                status.innerHTML += `<br>Layout height: ${chartData.layout.height}`;
+
+                console.log('Chart data:', chartData);
+
+            } catch (error) {
+                status.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
+                console.error('Chart loading error:', error);
+            }
+        }
+
+        // Load chart when page is ready
+        if (typeof Plotly !== 'undefined') {
+            loadChart();
+        } else {
+            status.innerHTML = '<span class="error">❌ Plotly.js not loaded!</span>';
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ symbol }} {{ timeframe }} Chart</title>
+
+    <!-- Plotly.js CDN -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: #ffffff;
+            min-height: 100vh;
+            padding: 10px;
+        }
+
+        @media (min-width: 768px) {
+            body {
+                padding: 20px;
+            }
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        @media (max-width: 600px) {
+            header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .header-right {
+                width: 100%;
+                justify-content: space-between;
+            }
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .back-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+
+        .back-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        h1 {
+            font-size: 1.5em;
+            background: linear-gradient(45deg, #00f2fe, #4facfe);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        @media (min-width: 768px) {
+            h1 {
+                font-size: 2em;
+            }
+        }
+
+        .header-right {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .info-badge {
+            padding: 6px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            font-size: 0.8em;
+            white-space: nowrap;
+        }
+
+        .refresh-btn {
+            background: linear-gradient(45deg, #00f2fe, #4facfe);
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(79, 172, 254, 0.4);
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .controls label {
+            color: #a0a0a0;
+            font-size: 0.85em;
+        }
+
+        .controls select {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+
+        .controls select option {
+            background-color: #1a1a2e;
+            color: white;
+        }
+
+        .chart-container {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 10px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            width: 100%;
+            height: 70vh;
+            min-height: 500px;
+        }
+
+        @media (min-width: 1024px) {
+            .chart-container {
+                padding: 20px;
+                height: 1000px;
+            }
+        }
+
+        #chart {
+            width: 100%;
+            height: 100%;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 100px 20px;
+        }
+
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-top: 4px solid #00f2fe;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .price-info {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+
+        @media (min-width: 480px) {
+            .price-info {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        @media (min-width: 768px) {
+            .price-info {
+                grid-template-columns: repeat(5, 1fr);
+                gap: 15px;
+                padding: 20px;
+            }
+        }
+
+        .price-item {
+            text-align: center;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .price-label {
+            color: #a0a0a0;
+            font-size: 0.8em;
+            margin-bottom: 3px;
+        }
+
+        .price-value {
+            font-size: 1.1em;
+            font-weight: 700;
+            color: #00f2fe;
+        }
+
+        @media (min-width: 768px) {
+            .price-value {
+                font-size: 1.3em;
+            }
+        }
+
+        .error {
+            color: #ff6b6b;
+            text-align: center;
+            padding: 40px;
+            font-size: 1.1em;
+        }
+
+        .live-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85em;
+            color: #00f2fe;
+            font-weight: 600;
+        }
+
+        .live-pulse {
+            width: 8px;
+            height: 8px;
+            background-color: #00f2fe;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #00f2fe;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: scale(1.5);
+                opacity: 0.5;
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="header-left">
+                <button class="back-btn" onclick="goBack()">← Back</button>
+                <h1>{{ symbol }} - {{ timeframe.upper() }}</h1>
+            </div>
+            <div class="header-right">
+                <div class="live-indicator">
+                    <div class="live-pulse"></div>
+                    <span>LIVE</span>
+                </div>
+                <div class="info-badge">📊 {{ total_candles }} candles</div>
+                <div class="info-badge">🕐 Last: <span id="lastUpdatedTS">{{ last_candle }}</span></div>
+                <button class="refresh-btn" onclick="refreshChart()">🔄 Refresh</button>
+            </div>
+        </header>
+
+        <div class="controls">
+            <label for="candleCount">Candles to display:</label>
+            <select id="candleCount" onchange="loadChart()">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+                <option value="500">500</option>
+                <option value="1000">1000</option>
+            </select>
+
+            <label style="margin-left: 20px;">Chart Features:</label>
+            <span style="color: #a0a0a0; font-size: 0.85em;">✨ Zoom (drag), Pan (shift+drag), Reset
+                (double-click)</span>
+        </div>
+
+        <div class="price-info" id="priceInfo" style="display: none;">
+            <div class="price-item">
+                <div class="price-label">Open</div>
+                <div class="price-value" id="priceOpen">-</div>
+            </div>
+            <div class="price-item">
+                <div class="price-label">High</div>
+                <div class="price-value" id="priceHigh">-</div>
+            </div>
+            <div class="price-item">
+                <div class="price-label">Low</div>
+                <div class="price-value" id="priceLow">-</div>
+            </div>
+            <div class="price-item">
+                <div class="price-label">Close</div>
+                <div class="price-value" id="priceClose">-</div>
+            </div>
+            <div class="price-item">
+                <div class="price-label">Volume</div>
+                <div class="price-value" id="priceVolume">-</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div id="chart">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <div>Loading interactive chart...</div>
+                </div>
+            </div>
+        </div>
+
+
+    </div>
+
+    <script>
+        let rawTraceData = null;
+        let lastKnownTimestamp = '{{ last_candle }}';
+        const symbol = '{{ symbol }}';
+        const timeframe = '{{ timeframe }}';
+
+        function logDebug(message) {
+            const consoleDiv = document.getElementById('debugConsole');
+            if (consoleDiv) {
+                const entry = document.createElement('div');
+                entry.textContent = `> ${message}`;
+                consoleDiv.appendChild(entry);
+                consoleDiv.scrollTop = consoleDiv.scrollHeight;
+            }
+            console.log(message);
+        }
+
+        function goBack() {
+            window.location.href = '/';
+        }
+
+        async function loadLatestPrice() {
+            try {
+                const response = await fetch(`/api/latest/${symbol}/${timeframe}`);
+                const data = await response.json();
+
+                if (!data.error) {
+                    document.getElementById('priceOpen').textContent = data.open.toFixed(2);
+                    document.getElementById('priceHigh').textContent = data.high.toFixed(2);
+                    document.getElementById('priceLow').textContent = data.low.toFixed(2);
+                    document.getElementById('priceClose').textContent = data.close.toFixed(2);
+                    document.getElementById('priceVolume').textContent = data.volume.toFixed(4);
+                    document.getElementById('priceInfo').style.display = 'grid';
+                }
+            } catch (error) {
+                logDebug('Error loading price: ' + error.message);
+            }
+        }
+
+        let relayoutTimer = null;
+
+        async function loadChart(startDate = null, endDate = null) {
+            const chartDiv = document.getElementById('chart');
+            // Only show full loading spinner if it's the initial load
+            if (!startDate && !endDate) {
+                chartDiv.innerHTML = '<div class="loading"><div class="spinner"></div><div>Loading interactive chart...</div></div>';
+            }
+
+            try {
+                let url = `/api/chart/${symbol}/${timeframe}`;
+
+                if (startDate && endDate) {
+                    // Add buffer to request to allow for some panning without immediately hitting edge
+                    // But for now, strictly enabling requested range + small buffer is safer
+                    url += `?start=${startDate}&end=${endDate}`;
+                } else {
+                    const candleCount = document.getElementById('candleCount').value;
+                    url += `?candles=${candleCount}`;
+                }
+
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    throw new Error('Failed to load chart data');
+                }
+
+                const chartData = await response.json();
+
+                // Store raw data for autorange usage
+                if (chartData.data && chartData.data.length > 0) {
+                    rawTraceData = chartData.data[0];
+                    // Update header if we have new data
+                    if (rawTraceData.x && rawTraceData.x.length > 0) {
+                        const latest = rawTraceData.x[rawTraceData.x.length - 1];
+                        document.getElementById('lastUpdatedTS').textContent = latest.replace('T', ' ');
+                        lastKnownTimestamp = latest.replace('T', ' ');
+                    }
+                }
+
+                // Auto-Follow Camera Logic
+                if (startDate && chartDiv.layout && chartDiv.layout.xaxis && chartDiv.layout.xaxis.range) {
+                    const currentRange = chartDiv.layout.xaxis.range;
+                    const viewEnd = new Date(currentRange[1]).getTime();
+                    const dataEnd = new Date(rawTraceData.x[rawTraceData.x.length - 1]).getTime();
+
+                    // If the user's view is within 5% of the end, auto-scroll forward
+                    const duration = viewEnd - new Date(currentRange[0]).getTime();
+                    const isAtEdge = (dataEnd - viewEnd) < (duration * 0.1);
+
+                    if (isAtEdge) {
+                        // Sliding window: maintain width but move to the end
+                        const newViewEnd = dataEnd + (duration * 0.05); // Add small padding
+                        const newViewStart = newViewEnd - duration;
+                        if (!chartData.layout.xaxis) chartData.layout.xaxis = {};
+                        chartData.layout.xaxis.range = [new Date(newViewStart).toISOString(), new Date(newViewEnd).toISOString()];
+                    } else {
+                        // Preserve historical view sticking to the same timestamps
+                        if (!chartData.layout.xaxis) chartData.layout.xaxis = {};
+                        chartData.layout.xaxis.range = currentRange;
+                    }
+                }
+
+                // Render the Plotly chart
+                Plotly.react('chart', chartData.data, chartData.layout, {
+                    responsive: true,
+                    displayModeBar: true,
+                    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+                    displaylogo: false,
+                    scrollZoom: true
+                });
+
+                chartDiv.removeAllListeners('plotly_relayout');
+                chartDiv.on('plotly_relayout', handleRelayout);
+
+                if (!startDate) {
+                    setTimeout(() => autoRangeY(chartDiv), 500);
+                }
+
+            } catch (error) {
+                if (!startDate) {
+                    chartDiv.innerHTML = `<div class="error">Error loading chart: ${error.message}</div>`;
+                }
+                console.error('Error loading chart:', error);
+            }
+        }
+
+        function handleRelayout(eventdata) {
+            const chartDiv = document.getElementById('chart');
+
+            // 1. Handle Autorange (Y-axis) - Instant
+            autoRangeY(chartDiv, eventdata);
+
+            // 2. Handle Data Fetching (X-axis) - Debounced
+            // Check if x-axis changed
+            let xRange = null;
+            if (eventdata['xaxis.range[0]'] && eventdata['xaxis.range[1]']) {
+                xRange = [eventdata['xaxis.range[0]'], eventdata['xaxis.range[1]']];
+            } else if (eventdata['xaxis.range']) {
+                xRange = eventdata['xaxis.range'];
+            }
+
+            if (xRange) {
+                if (relayoutTimer) clearTimeout(relayoutTimer);
+
+                relayoutTimer = setTimeout(() => {
+                    console.log('Fetching new data for range:', xRange);
+                    // Add some buffer? For now just fetch what is seen.
+                    // Ideally we fetch 2x the range centered on view.
+
+                    const startTs = new Date(xRange[0]).getTime();
+                    const endTs = new Date(xRange[1]).getTime();
+                    const duration = endTs - startTs;
+
+                    // Fetch 3x range (1 screen left, 1 screen current, 1 screen right)
+                    // This creates a smooth "infinite scroll" feel
+                    const newStart = new Date(startTs - duration).toISOString();
+                    const newEnd = new Date(endTs + duration).toISOString();
+
+                    loadChart(newStart, newEnd);
+                }, 1000); // 1000ms debounce
+            }
+        }
+
+        function autoRangeY(chartDiv, eventdata = null) {
+            // ... (keep existing autoRangeY logic, just copy it back in) ...
+            // Note: Since I am replacing safe block, I should just call the existing one if I could, 
+            // but I need to redefine the layout handler structure.
+            // I will paste the autoRangeY body here.
+
+            // If event data is provided, check if it's an x-axis change
+            let shouldUpdate = !eventdata; // Update by default if called manually
+            let xRange = null;
+
+            if (eventdata) {
+                if (eventdata['xaxis.range[0]'] && eventdata['xaxis.range[1]']) {
+                    xRange = [eventdata['xaxis.range[0]'], eventdata['xaxis.range[1]']];
+                    shouldUpdate = true;
+                } else if (eventdata['xaxis.range']) {
+                    xRange = eventdata['xaxis.range'];
+                    shouldUpdate = true;
+                } else if (eventdata['xaxis.autorange']) {
+                    shouldUpdate = true;
+                }
+            }
+
+            if (!shouldUpdate) return;
+
+            try {
+                // Get current x-range from layout if not in event
+                if (!xRange) {
+                    xRange = chartDiv.layout.xaxis.range;
+                }
+
+                if (!xRange) return;
+
+                // Use the raw data instead of chartDiv.data
+                const trace = rawTraceData;
+                if (!trace || !trace.x) {
+                    return;
+                }
+
+                // Find indices of data points within visible range
+                const xStart = xRange[0];
+                const xEnd = xRange[1];
+
+                // Find start index (dates are strings, string comparison works for ISO format)
+                const startTs = new Date(xStart).getTime();
+                const endTs = new Date(xEnd).getTime();
+
+                if (isNaN(startTs) || isNaN(endTs)) {
+                    return;
+                }
+
+                let minLow = Infinity;
+                let maxHigh = -Infinity;
+                let hasData = false;
+
+                for (let i = 0; i < trace.x.length; i++) {
+                    const currentTs = new Date(trace.x[i]).getTime();
+
+                    if (currentTs >= startTs && currentTs <= endTs) {
+                        const high = trace.high[i];
+                        const low = trace.low[i];
+
+                        // high/low should be numbers from JSON, but safety check won't hurt
+                        if (high !== null && !isNaN(high) && Number(high) > maxHigh) maxHigh = Number(high);
+                        if (low !== null && !isNaN(low) && Number(low) < minLow) minLow = Number(low);
+                        hasData = true;
+                    }
+                }
+
+                // Only update if we found valid data and the range is significantly different
+                if (hasData && minLow !== Infinity && maxHigh !== -Infinity) {
+                    const padding = (maxHigh - minLow) * 0.05;
+                    const newMin = minLow - padding;
+                    const newMax = maxHigh + padding;
+
+                    // Check if update is needed to avoid infinite loops
+                    const currentY = chartDiv.layout.yaxis.range;
+                    if (!currentY || Math.abs(currentY[0] - newMin) > newMin * 0.001 || Math.abs(currentY[1] - newMax) > newMax * 0.001) {
+                        Plotly.relayout(chartDiv, {
+                            'yaxis.range': [newMin, newMax]
+                        });
+                    }
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+
+
+        async function refreshChart(force = false) {
+            if (!force) {
+                // Check if there is actually new data before triggering a full expensive chart reload
+                try {
+                    const response = await fetch(`/api/latest/${symbol}/${timeframe}`);
+                    const data = await response.json();
+
+                    if (!data.error && data.timestamp !== lastKnownTimestamp) {
+                        console.log('New data detected:', data.timestamp);
+                        const chartDiv = document.getElementById('chart');
+                        let start = null, end = null;
+
+                        // If we already have a view range, try to update in-place
+                        if (chartDiv.layout && chartDiv.layout.xaxis && chartDiv.layout.xaxis.range) {
+                            start = chartDiv.layout.xaxis.range[0];
+                            end = chartDiv.layout.xaxis.range[1];
+                        }
+
+                        await loadChart(start, end);
+                        await loadLatestPrice();
+                    }
+                } catch (e) {
+                    console.warn('Silent refresh check failed:', e);
+                }
+            } else {
+                await loadChart();
+                await loadLatestPrice();
+            }
+        }
+
+        // Load chart and price on page load
+        window.onload = () => {
+            loadChart();
+            loadLatestPrice();
+        };
+
+        // Auto-refresh/Poll every 30 seconds
+        setInterval(() => {
+            refreshChart();
+        }, 30 * 1000);
+    </script>
+</body>
+
+</html>

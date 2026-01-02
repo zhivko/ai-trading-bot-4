@@ -1,0 +1,32 @@
+# Requirements for multi_stochastic_quad_rotation.py and Flask Web Monitor
+
+# Web framework
+Flask>=3.0.0
+flask-cors>=4.0.0
+
+# Core data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Cryptocurrency data fetching
+ccxt>=4.0.0
+pandas_ta>=0.3.14b
+python-binance>=1.0.19
+
+# Interactive plotting and visualization
+plotly>=5.18.0
+
+# Static plotting (for multi_stochastic_quad_rotation.py)
+matplotlib>=3.7.0
+mplfinance>=0.12.9b7
+
+# Statistical analysis
+scipy>=1.10.0
+
+# HTTP requests
+requests>=2.31.0
+
+# Deep Learning & Pattern Recognition
+torch>=2.0.0
+scikit-learn>=1.3.0
+tqdm>=4.66.0

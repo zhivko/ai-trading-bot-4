@@ -1,0 +1,101 @@
+import ccxt
+import pandas as pd
+import pandas_ta as ta
+import time
+import os
+from datetime import datetime, timedelta
+import argparse
+
+PAIRS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT']
+
+def fetch_historical_ohlcv(pair, TIMEFRAME, start_date, end_date=None):
+    """
+    Fetch historical OHLCV data from Binance for a given pair and date range.
+    Handles pagination to get all data.
+    """
+    exchange = ccxt.binance({
+        'rateLimit': 1200,
+        'enableRateLimit': True,
+    })
+
+    if end_date is None:
+        end_date = datetime.utcnow()
+
+    start_ts = int(pd.Timestamp(start_date).timestamp() * 1000)
+    end_ts = int(pd.Timestamp(end_date).timestamp() * 1000)
+
+    all_data = []
+    since = start_ts
+
+    while since < end_ts:
+        total_span = end_ts - start_ts
+        current_progress = since - start_ts
+        percentage = (current_progress / total_span) * 100 if total_span > 0 else 100
+        print(f"Fetching {pair} - {TIMEFRAME}: {percentage:.2f}% complete")
+        try:
+            data = exchange.fetch_ohlcv(pair, TIMEFRAME, since, 1000)
+            if not data:
+                break
+            all_data.extend(data)
+            since = data[-1][0] + 1  # Next timestamp
+            time.sleep(1)  # Respect rate limit
+        except Exception as e:
+            print(f"Error fetching data: {e}")
+            break
+
+    df = pd.DataFrame(all_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df = df[df['timestamp'] <= end_date]
+    df.set_index('timestamp', inplace=True)
+    
+    # Ensure EMA is calculated
+    if 'ema_50' not in df.columns:
+        df['ema_50'] = df.ta.ema(length=50)
+        # Fill NaN values to prevent errors in the beginning of the episode
+        df['ema_50'] = df['ema_50'].fillna(0)
+    
+    return df
+
+def fetch_data_for_pairs(pairs, start_date, end_date=None):
+    """
+    Fetch data for multiple pairs.
+    Returns a dict of DataFrames.
+    """
+    data = {}
+    for pair in pairs:
+        print(f"Fetching data for {pair}...")
+        data[pair] = fetch_historical_ohlcv(pair, start_date, end_date)
+    return data
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Fetch historical OHLCV data for a trading pair.')
+    parser.add_argument('--pair', type=str, default='BTCUSDT', help='Trading pair (default: BTCUSDT)')
+    args = parser.parse_args()
+    pair = args.pair
+
+    # Fetch data from 2021 to 2025
+    TIMEFRAME = '1h'
+    filename = f'{pair.replace("/", "_")}_{TIMEFRAME}_data.csv'
+    start_date = '2016-01-01'
+    end_date = '2025-11-29'
+    # Check if file already exists
+    if os.path.exists(filename):
+        print(f"File {filename} already exists. Loading existing data...")
+    else:
+        print(f"Fetching data for {pair} from {start_date} to {end_date}...")
+        df = fetch_historical_ohlcv(pair, TIMEFRAME, start_date, end_date)
+        df.to_csv(filename)
+        print(f"Saved {len(df)} rows to {filename}")
+
+    TIMEFRAME = '15m'
+    filename = f'{pair.replace("/", "_")}_{TIMEFRAME}_data.csv'
+    start_date = '2016-01-01'
+    end_date = '2025-11-29'
+    # Check if file already exists
+    if os.path.exists(filename):
+        print(f"File {filename} already exists. Loading existing data...")
+    else:
+        print(f"Fetching data for {pair} from {start_date} to {end_date}...")
+        df = fetch_historical_ohlcv(pair, TIMEFRAME, start_date, end_date)
+        df.to_csv(filename)
+        print(f"Saved {len(df)} rows to {filename}")
