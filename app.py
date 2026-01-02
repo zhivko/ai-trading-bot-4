@@ -204,11 +204,18 @@ def get_strategy_preview(strategy_id, timestamp):
              entry_idx = df.index.searchsorted(ts)
              if entry_idx >= len(df): entry_idx = len(df) - 1
         
+        # Calculate NN Confidence for this window so sidebar is accurate
+        from chart_generator import identify_nn_patterns
+        # Process a small buffer around the entry point to ensure stochastics/NN have context
+        # 400 candles is enough for stochastics warm-up + NN window
+        subset_df = df.iloc[max(0, entry_idx-400):entry_idx+1].copy()
+        subset_df = identify_nn_patterns(subset_df)
+        
         # Dispatch to appropriate strategy module
         setup_data = {}
         if str(strategy_id) == '3':
             import backtest_strategy_3_lvn_acceleration as strat3
-            setup_data = strat3.get_trade_setup(df, entry_idx)
+            setup_data = strat3.get_trade_setup(subset_df, len(subset_df)-1)
         else:
             setup_data = {
                 'error': f"Strategy {strategy_id} preview not implemented yet",

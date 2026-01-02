@@ -238,10 +238,12 @@ def get_trade_setup(df, entry_idx):
                 tp_target = entry_price * 1.03
                 tp_desc = "Fixed 3% (No Structure)"
 
-    # Get NN Confidence if available
+    # Get NN Confidence: Search back 20 candles to find the 'W' pattern peak that confirmed the entry
     nn_conf = 0.0
     if 'nn_confidence' in df.columns:
-        nn_conf = float(df['nn_confidence'].iloc[entry_idx])
+        # Search back up to 20 candles for the confirming pattern
+        lookback_range = df['nn_confidence'].iloc[max(0, entry_idx-20):entry_idx+1]
+        nn_conf = float(lookback_range.max())
 
     setup = {
         'timestamp': entry_time,

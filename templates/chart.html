@@ -338,10 +338,94 @@
             cursor: pointer;
         }
 
-        @media (max-width: 1024px) {
-            .close-panel-btn {
-                display: block;
-            }
+        /* Strategy Preview Styles */
+        .strategy-details {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 25px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .strat-header {
+            font-size: 1.1em;
+            font-weight: 800;
+            color: #00f2fe;
+            margin-bottom: 10px;
+        }
+
+        .strat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .strat-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .strat-item.full-width {
+            grid-column: span 2;
+        }
+
+        .strat-item .label {
+            font-size: 0.75em;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .strat-item .value {
+            font-size: 0.95em;
+            font-weight: 700;
+            /* BOLD VALUES */
+            color: #fff;
+        }
+
+        .strat-item .value.cyan {
+            color: #00f2fe;
+        }
+
+        .strat-item .value.gold {
+            color: #ffd700;
+        }
+
+        .strat-item .value.danger {
+            color: #ff4444;
+        }
+
+        .strat-item .value.neon-green {
+            color: #39ff14;
+        }
+
+        .split-val {
+            display: flex;
+            align-items: baseline;
+            gap: 5px;
+        }
+
+        .sub-val {
+            font-size: 0.8em;
+            color: #aaa;
+            font-weight: 400;
+        }
+
+        .vp-mini-chart {
+            height: 150px;
+            width: 100%;
+            margin-top: 15px;
+        }
+
+        .strategy-placeholder {
+            padding: 30px 10px;
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            border: 1px dashed rgba(255, 255, 255, 0.05);
         }
     </style>
 </head>
@@ -418,31 +502,31 @@
                 <div class="strat-grid">
                     <!-- NEW: Marker Info -->
                     <div class="strat-item full-width">
-                        <span class="label">Marker Type</span>
+                        <span class="label">Marker Type:</span>
                         <span class="value cyan" id="markerType">--</span>
                     </div>
                     <div class="strat-item full-width">
-                        <span class="label">Marker Time</span>
+                        <span class="label">Marker Time:</span>
                         <span class="value" id="markerTime">--</span>
                     </div>
 
                     <div class="strat-item">
-                        <span class="label">Entry Price</span>
+                        <span class="label">Entry Price:</span>
                         <span class="value gold" id="previewEntry">--</span>
                     </div>
                     <div class="strat-item" id="nnConfContainer">
-                        <span class="label">NN Confidence</span>
+                        <span class="label">NN Confidence:</span>
                         <span class="value cyan" id="previewNNConf">--</span>
                     </div>
                     <div class="strat-item">
-                        <span class="label">Stop Loss</span>
+                        <span class="label">Stop Loss:</span>
                         <span class="value split-val">
                             <span class="danger" id="previewSL">--</span>
                             <span class="sub-val" id="previewSLPct">(-%)</span>
                         </span>
                     </div>
                     <div class="strat-item full-width">
-                        <span class="label">Next LVN Target</span>
+                        <span class="label">Next LVN Target:</span>
                         <span class="value neon-green" id="previewTP">--</span>
                     </div>
                 </div>
