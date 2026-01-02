@@ -4,6 +4,19 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 
+# Strategy Modules
+try:
+    import backtest_strategy_1_poc_target as strategy_1
+    import backtest_strategy_2_vah_exit as strategy_2
+    import backtest_strategy_3_lvn_acceleration as strategy_3
+    import backtest_strategy_4_multi_tier as strategy_4
+    import backtest_strategy_5_trailing_stop as strategy_5
+    import backtest_strategy_6_volume_divergence as strategy_6
+    STRATEGIES_AVAILABLE = True
+except ImportError as e:
+    print(f"Strategy modules import error: {e}")
+    STRATEGIES_AVAILABLE = False
+
 from scipy.stats import linregress
 import torch
 import torch.nn as nn
@@ -22,15 +35,18 @@ def calculate_stochastic(df, period_k, smooth_k, smooth_d):
     d_percent = k_percent.rolling(window=smooth_d, min_periods=1).mean()
     return d_percent
 
-# Pivot-based channel logic is now below
-
 # -------------------------------------------------------------------------
 # NEURAL NETWORK PATTERN DETECTION (RTX 5090 Optimized Inference)
 # -------------------------------------------------------------------------
+import time
+from threading import Lock
+from volume_profile import calculate_volume_profile, get_raw_volume_histogram
 class PatternDetectorCNN(nn.Module):
-    def __init__(self, window_size=100):
+    def __init__(self, window_size=100, vp_bins=80):
         super(PatternDetectorCNN, self).__init__()
-        self.features = nn.Sequential(
+        
+        # --- Branch A: Time Series (Stochastic) ---
+        self.ts_features = nn.Sequential(
             nn.Conv1d(1, 128, kernel_size=11, stride=1, padding=5),
             nn.BatchNorm1d(128),
             nn.LeakyReLU(0.2),
@@ -42,10 +58,22 @@ class PatternDetectorCNN(nn.Module):
             nn.Conv1d(256, 512, kernel_size=5, stride=1, padding=2),
             nn.BatchNorm1d(512),
             nn.LeakyReLU(0.2),
-            nn.AdaptiveAvgPool1d(16)
+            nn.AdaptiveAvgPool1d(4)
         )
+        
+        # --- Branch B: Market Structure (Volume Profile) ---
+        self.vp_features = nn.Sequential(
+            nn.Linear(vp_bins, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU()
+        )
+        
+        # --- Fusion Head ---
+        combined_dim = (512 * 4) + 64 
+        
         self.classifier = nn.Sequential(
-            nn.Linear(512 * 16, 1024),
+            nn.Linear(combined_dim, 1024),
             nn.ReLU(),
             nn.Dropout(0.4),
             nn.Linear(1024, 256),
@@ -53,39 +81,49 @@ class PatternDetectorCNN(nn.Module):
             nn.Linear(256, 1)
         )
 
-    def forward(self, x):
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        return self.classifier(x)
+    def forward(self, x_ts, x_vp):
+        f_ts = self.ts_features(x_ts)
+        f_ts = f_ts.view(f_ts.size(0), -1)
+        f_vp = self.vp_features(x_vp)
+        combined = torch.cat((f_ts, f_vp), dim=1)
+        return self.classifier(combined)
+
+from threading import Lock
 
 _NN_MODEL = None
 _NN_CACHE = {}  # Cache for NN detection results: {(filepath, data_len, threshold): results}
+_NN_LOCK = Lock()
 
 def get_nn_model():
     global _NN_MODEL
+    # Double-checked locking pattern for thread safety
     if _NN_MODEL is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = PatternDetectorCNN()
-        model_path = os.path.join(os.path.dirname(__file__), "stoch_low_detector_5090.pth")
-        if os.path.exists(model_path):
-            try:
-                state_dict = torch.load(model_path, map_location=device, weights_only=True)
-                new_state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
-                model.load_state_dict(new_state_dict)
-                model.to(device)
-                model.eval()
-                _NN_MODEL = model
-                print(f"NN Model loaded successfully on {device}")
-            except Exception as e:
-                print(f"Error loading NN Model: {e}")
+        with _NN_LOCK:
+            if _NN_MODEL is None:
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                # Optimization: Load model tailored for 5090 inference
+                model_path = os.path.join(os.path.dirname(__file__), "stoch_vp_detector_15m.pth")
+                
+                if os.path.exists(model_path):
+                    try:
+                        # Initialize Model Architecture (Must match training script)
+                        model = PatternDetectorCNN().to(device)
+                        state_dict = torch.load(model_path, map_location=device, weights_only=True)
+                        
+                        # Fix for DataParallel keys if training used it (just in case)
+                        new_state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+                        model.load_state_dict(new_state_dict)
+                        model.to(device)
+                        model.eval()
+                        _NN_MODEL = model
+                        print(f"NN Model (Dual-Input) loaded successfully on {device} (Singleton Initialized)")
+                    except Exception as e:
+                        print(f"Error loading NN Model: {e}")
     return _NN_MODEL
 
-def identify_nn_patterns(df, nn_threshold=85):
-    """Detects 'W' patterns using the trained Neural Network
-    
-    Args:
-        nn_threshold: Confidence threshold (0-100), default 85
-    """
+def identify_nn_patterns(df, nn_threshold=30):
+    """Detects 'W' patterns using the Dual-Input Neural Network"""
+    # Load model
     model = get_nn_model()
     if model is None:
         df['nn_alarm'] = False
@@ -93,70 +131,151 @@ def identify_nn_patterns(df, nn_threshold=85):
 
     device = next(model.parameters()).device
     
-    # Calculate stochastic the SAME WAY as training script (single smoothing, not double)
-    # Training uses: stoch.rolling(smooth_k).mean() / 100.0
-    # NOT the double-smoothed version from calculate_stochastic()
+    # --- CACHE LOOKUP ---
+    # Key: (Last Timestamp, Total Length, Threshold)
+    if not df.empty:
+        cache_key = (df.index[-1], len(df), nn_threshold)
+        if cache_key in _NN_CACHE:
+            cached_data = _NN_CACHE[cache_key]
+            if isinstance(cached_data, tuple):
+                df['nn_alarm'], df['nn_confidence'] = cached_data
+            else:
+                df['nn_alarm'] = cached_data
+                df['nn_confidence'] = 0.0
+            return df
+    
+    # Stochastic Calculation (Same as training)
     period_k = 60
     smooth_k = 10
     low_min = df['low'].rolling(window=period_k).min()
     high_max = df['high'].rolling(window=period_k).max()
     stoch = 100 * ((df['close'] - low_min) / (high_max - low_min))
     stoch_vals = (stoch.rolling(window=smooth_k).mean() / 100.0).values
+    
     nn_results = np.zeros(len(df), dtype=bool)
+    nn_confidences = np.zeros(len(df), dtype=float)
     
     window_size = 100
-    start_idx = window_size
+    # Optimization: For live chart interaction, we DO NOT need to calculate NN for the entire history (years of data).
+    # We only need it for the recent view + some buffer.
+    # Let's process only the last 2000 bars (approx 20 days of 15m data).
+    # If users scroll back further, they won't see NN markers, which is acceptable for performance.
+    
+    SAFE_LOOKBACK = 3000 
+    start_idx = max(200, len(df) - SAFE_LOOKBACK)
+    
+    # Batch Processing to handle Volume Profile speed
     valid_indices = []
-    windows = []
+    ts_windows = []
+    vp_vectors = []
+    
+    print(f"Generating NN signals for last {len(df) - start_idx} candles (Optimization Active)...")
+    
+    t_loop_start = time.time()
+    t_vp_total = 0
+    t_prep_total = 0
     
     for i in range(start_idx, len(df)):
-        window = stoch_vals[i-window_size:i]
-        if not np.isnan(window).any():
-            valid_indices.append(i)
-            windows.append(window)
-            
-    if windows:
+        t_p_start = time.time()
+        # Stoch Window
+        win_stoch = stoch_vals[i-window_size:i]
+        
+        if not np.isnan(win_stoch).any():
+             # VP Window (200 bars)
+             t_v_start = time.time()
+             # Optimization: Use lightweight histogram for NN instead of full VP analysis
+             vp_profile = get_raw_volume_histogram(df, i-200, i, num_bins=80)
+             t_vp_total += (time.time() - t_v_start)
+             
+             if len(vp_profile) == 80:
+                 vp_max = vp_profile.max()
+                 if vp_max > 0:
+                     vp_norm = vp_profile / vp_max
+                     
+                     valid_indices.append(i)
+                     ts_windows.append(win_stoch)
+                     vp_vectors.append(vp_norm)
+        t_prep_total += (time.time() - t_p_start)
+    
+    t_loop_end = time.time()
+    print(f"DEBUG: NN Loop Timing Breakdown (Total {t_loop_end - t_loop_start:.4f}s):")
+    print(f"  - Total Data Prep/Stoch: {t_prep_total - t_vp_total:.4f}s")
+    print(f"  - Total VP Calculation:  {t_vp_total:.4f}s")
+    
+    if ts_windows:
+        t_inf_start = time.time()
         with torch.no_grad():
             has_cuda = torch.cuda.is_available()
-            # Handle float32/autocast
-            with torch.amp.autocast('cuda') if has_cuda else torch.device('cpu'):
-                x_tensor = torch.FloatTensor(np.array(windows)).unsqueeze(1).to(device)
-                logits = model(x_tensor)
-                probs = torch.sigmoid(logits).cpu().numpy().flatten()
+            BATCH_SIZE = 1024 # Larger batch for GPU
+            
+            probs_all = []
+            
+            # Process in Batches
+            for k in range(0, len(ts_windows), BATCH_SIZE):
+                batch_ts = np.array(ts_windows[k:k+BATCH_SIZE])
+                batch_vp = np.array(vp_vectors[k:k+BATCH_SIZE])
                 
-                # --- AGGRESSIVE SUPPRESSION LOGIC (NMS) ---
-                # Use dynamic threshold from parameter
-                threshold = nn_threshold / 100.0  # Convert from percentage to 0-1
-                temp_results = probs > threshold
-                
-                # 2. Local Peak Detection / Cooldown (30 bars ~ 7.5 hours)
-                final_results = np.zeros_like(probs, dtype=bool)
-                cooldown = 30  # Reduced from 60 to allow more detections
-                for idx in range(len(probs)):
-                    if probs[idx] > threshold:
-                        # Check if this is the maximum in [idx-cooldown, idx+cooldown]
-                        start = max(0, idx - cooldown)
-                        end = min(len(probs), idx + cooldown)
-                        if probs[idx] == np.max(probs[start:end]):
-                            final_results[idx] = True
-                
-                nn_results[valid_indices] = final_results
-                
-                # Debug: Print detection stats and top scores
-                detected_count = np.sum(final_results)
-                if detected_count > 0:
-                    print(f"NN Stochastic Low Detection: Found {detected_count} patterns (threshold={nn_threshold}%)")
-                
-                # Show top 5 confidence scores to help tune threshold
-                if len(probs) > 0:
-                    top_indices = np.argsort(probs)[-5:][::-1]  # Top 5 highest scores
-                    print(f"Top 5 NN confidence scores:")
-                    for idx in top_indices:
-                        actual_idx = valid_indices[idx]
-                        timestamp = df.index[actual_idx]
-                        print(f"  - {timestamp}: {probs[idx]*100:.1f}% confidence")
+                with torch.amp.autocast('cuda') if has_cuda else torch.device('cpu'):
+                    t_ts = torch.FloatTensor(batch_ts).unsqueeze(1).to(device)
+                    t_vp = torch.FloatTensor(batch_vp).to(device)
+                    
+                    logits = model(t_ts, t_vp)
+                    probs = torch.sigmoid(logits).cpu().numpy().flatten()
+                    probs_all.extend(probs)
+            
+            probs_all = np.array(probs_all)
+            
+            # --- AGGRESSIVE SUPPRESSION LOGIC (NMS) ---
+            threshold = nn_threshold / 100.0 
+            
+            # 2. Local Peak Detection / Cooldown (30 bars ~ 7.5 hours)
+            final_results = np.zeros_like(probs_all, dtype=bool)
+            cooldown = 30
+            
+            for idx, prob in enumerate(probs_all):
+                if prob > threshold:
+                    # Check if this is the maximum in [idx-cooldown, idx+cooldown]
+                    start = max(0, idx - cooldown)
+                    end = min(len(probs_all), idx + cooldown + 1)
+                    
+                    if prob == np.max(probs_all[start:end]):
+                        final_results[idx] = True
+            
+            nn_results[valid_indices] = final_results
+            nn_confidences[valid_indices] = probs_all
+            
+            # Debug: Print detection stats and top scores
+            detected_count = np.sum(final_results)
+            if detected_count > 0:
+                print(f"NN Stochastic Low Detection: Found {detected_count} patterns (threshold={nn_threshold}%)")
+            
+            # Show top 5 confidence scores to help tune threshold
+            if len(probs_all) > 0:
+                top_indices = np.argsort(probs_all)[-5:][::-1]  # Top 5 highest scores
+                print(f"Top 5 NN confidence scores:")
+                for idx in top_indices:
+                    actual_idx = valid_indices[idx]
+                    timestamp = df.index[actual_idx]
+                    print(f"  - {timestamp}: {probs_all[idx]*100:.1f}% confidence")
+            
+            t_inf_total = time.time() - t_inf_start
+            print(f"  - Total Model Inference: {t_inf_total:.4f}s")
                 
     df['nn_alarm'] = nn_results
+    df['nn_confidence'] = nn_confidences
+    
+    # --- CACHE STORAGE ---
+    if not df.empty:
+        cache_key = (df.index[-1], len(df), nn_threshold)
+        _NN_CACHE[cache_key] = (nn_results, nn_confidences)
+        
+        # Limit cache size to prevent memory leaks (keep last 20)
+        if len(_NN_CACHE) > 20:
+             # Remove oldest item (simple FIFO not strictly ordered dict but ok for this)
+             # Python 3.7+ dicts preserve insertion order, so next(iter(d)) is oldest.
+             first_key = next(iter(_NN_CACHE))
+             del _NN_CACHE[first_key]
+             
     return df
 
 def is_pivot(df, candle, window):
@@ -251,7 +370,7 @@ def detect_channel_breakout(df):
     
     return is_downtrend & is_above_top & was_below_top
 
-def identify_hybrid_signals(df, nn_threshold=85):
+def identify_hybrid_signals(df, nn_threshold=30):
     """
     Combines Classic Channel Breakouts with NN 'W' confirmation.
     Logic: Channel Establishment -> Breakout -> shallow W + Low Stochs.
@@ -285,7 +404,7 @@ def identify_hybrid_signals(df, nn_threshold=85):
     df['hybrid_alarm'] = hybrid_signals
     return df
 
-def identify_quad_rotation_alarms(df, nn_threshold=85):
+def identify_quad_rotation_alarms(df, nn_threshold=30):
     """
     Main aggregator: Calculates stochastics, classic channel, and identifies hybrid signals.
     Uses caching to avoid redundant NN detection on unchanged data.
@@ -302,7 +421,7 @@ def identify_quad_rotation_alarms(df, nn_threshold=85):
         if len(cached_df) == len(df) and (cached_df.index == df.index).all():
             print(f"[CACHE HIT] Using cached NN detection results (threshold={nn_threshold}%)")
             # Copy cached columns to current df
-            for col in ['nn_alarm', 'hybrid_alarm', 'alarm', 'stoch_9_3', 'stoch_14_3', 'stoch_40_4', 'stoch_60_10', 'slope']:
+            for col in ['nn_alarm', 'hybrid_alarm', 'alarm', 'stoch_9_3', 'stoch_14_3', 'stoch_40_4', 'stoch_60_10', 'slope', 'nn_confidence']:
                 if col in cached_df.columns:
                     df[col] = cached_df[col]
             return df
@@ -339,98 +458,47 @@ def identify_quad_rotation_alarms(df, nn_threshold=85):
     
     return df
 
-def calculate_linear_regression_channel(df, window=40):
-    """Calculate Linear Regression Channel for trend context (optimized for macro trends)"""
-    df['linreg_mid'] = np.nan
-    df['linreg_top'] = np.nan
-    df['linreg_bot'] = np.nan
-    df['slope'] = np.nan
-    
-    # Pre-calculate to avoid constant lookup
-    closes = df['close'].values
-    l_mid = np.full(len(df), np.nan)
-    l_top = np.full(len(df), np.nan)
-    l_bot = np.full(len(df), np.nan)
-    slopes = np.full(len(df), np.nan)
-    
-    x = np.arange(window)
-    for i in range(window, len(df)):
-        y = closes[i-window:i]
-        # Standard OLS
-        slope, intercept, _, _, _ = linregress(x, y)
-        current_mid = slope * (window - 1) + intercept
-        std_dev = np.std(y)
-        
-        l_mid[i] = current_mid
-        l_top[i] = current_mid + (2.0 * std_dev)
-        l_bot[i] = current_mid - (2.0 * std_dev)
-        slopes[i] = slope
-        
-    df['linreg_mid'] = l_mid
-    df['linreg_top'] = l_top
-    df['linreg_bot'] = l_bot
-    df['slope'] = slopes
-    return df
 
-def identify_quad_rotation_alarms(df, nn_threshold=85):
-    """
-    Calculates 4 Stochastics, LinReg Channel, and identifies Quad Rotation Alarms.
-    Returns the dataframe with an 'alarm' column.
-    """
-    # Calculate stochastics
-    df['stoch_9_3'] = calculate_stochastic(df, 9, 1, 3)
-    df['stoch_14_3'] = calculate_stochastic(df, 14, 1, 3)
-    df['stoch_40_4'] = calculate_stochastic(df, 40, 1, 4)
-    df['stoch_60_10'] = calculate_stochastic(df, 60, 10, 10)
 
-    # Calculate Linear Regression Channel (Trend Context)
-    df = calculate_linear_regression_channel(df, window=40)
-    
-    # Identify Alarms (Vectorized)
-    # Condition A: Downward Channel (Slope < -0.5)
-    cond_downtrend = df['slope'] < -0.5
-    # Condition B: Quad Exhaustion (All low)
-    cond_quad_low = (df['stoch_9_3'] < 20) & (df['stoch_14_3'] < 25) & (df['stoch_40_4'] < 25) & (df['stoch_60_10'] < 25)
-    # Condition C: Turn Up (Fast Stoch curls up)
-    cond_turn_up = df['stoch_9_3'] > df['stoch_9_3'].shift(1)
-    
-    df['alarm'] = cond_downtrend & cond_quad_low & cond_turn_up
-    
-    # Hybrid Pattern Detection (Breakout + NN W)
-    df = identify_hybrid_signals(df, nn_threshold=nn_threshold)
-    
-    return df
-
-def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date=None, end_date=None, nn_threshold=85):
+def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date=None, end_date=None, nn_threshold=30, exit_strategy_id=3):
     """
     Generate interactive OHLC chart data with stochastics using Plotly
     Returns JSON data for Plotly chart
     
     Args:
-        nn_threshold: Neural network confidence threshold (0-100), default 85
+        nn_threshold: Neural network confidence threshold (0-100), default 30
     """
+    import time
+    t_start = time.time()
     # Read data
     df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+    t_load = time.time() - t_start
 
     # OPTIMIZATION: Slice DataFrame for processing
     process_start_index = 0
+    buffer_size = 2000 # Increased from 500 to 2000 to ensure robust indicator calculation
+    
     if start_date:
         try:
             s_ts = pd.to_datetime(start_date)
             if df.index.tz is None and s_ts.tz is not None:
                 s_ts = s_ts.tz_localize(None)
             mask_idx = np.searchsorted(df.index, s_ts)
-            process_start_index = max(0, mask_idx - 500)
+            process_start_index = max(0, mask_idx - buffer_size)
         except:
-            process_start_index = max(0, len(df) - num_candles - 500)
+            process_start_index = max(0, len(df) - num_candles - buffer_size)
     else:
-        process_start_index = max(0, len(df) - num_candles - 500)
+        process_start_index = max(0, len(df) - num_candles - buffer_size)
 
     # Create the working slice (copy to avoid SettingWithCopy warnings)
     df = df.iloc[process_start_index:].copy()
+    # print(f"DEBUG: Processing slice from {df.index[0]} to {df.index[-1]} (Buffer={buffer_size})")
 
     # Calculate Indicators and Alarms on Working dataset
+    t_alarms_start = time.time()
     df = identify_quad_rotation_alarms(df, nn_threshold=nn_threshold)
+    t_alarms = time.time() - t_alarms_start
+    t_alarms_end = t_alarms_start + t_alarms
 
     # -------------------------------------------------------------------------
     # Cross-Timeframe Logic (Show 1H Alarms on 15M Chart)
@@ -457,7 +525,10 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
                     df_1h = df_1h.iloc[start_idx_1h:].copy()
 
                 # Calculate alarms on 1h
-                df_1h = identify_quad_rotation_alarms(df_1h)
+                t_1h_start = time.time()
+                df_1h = identify_quad_rotation_alarms(df_1h, nn_threshold=nn_threshold)
+                t_1h = time.time() - t_1h_start
+                print(f"DEBUG: 1H Alarms calculation took {t_1h:.4f}s")
                 
                 # Filter for actual alarms
                 df_1h_alarms = df_1h[df_1h['alarm']].copy()
@@ -500,10 +571,11 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
     else:
         # Get last N candles
         chart_df = df.tail(num_candles).copy()
-        if df_1h_alarms is not None:
-            # rough align
-            start_time = chart_df.index[0]
-            df_1h_alarms = df_1h_alarms[df_1h_alarms.index >= start_time].copy()
+        if df_1h_alarms is not None and not chart_df.empty:
+            # STRICT ALIGNMENT: Clamp 1H alarms to exactly the visible chart range
+            min_ts = chart_df.index[0]
+            max_ts = chart_df.index[-1]
+            df_1h_alarms = df_1h_alarms[(df_1h_alarms.index >= min_ts) & (df_1h_alarms.index <= max_ts)].copy()
             debug_msg += f" | In View: {len(df_1h_alarms)}"
 
     # Create subplots: 1 for price+volume, 4 for stochastics
@@ -532,6 +604,7 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
         ),
         row=1, col=1
     )
+    t_plotly_start = time.time()
     
 
 
@@ -671,40 +744,72 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
                 ),
                 row=1, col=1
             )
+    
+    # -------------------------------------------------------------------------
+    # Volume Profile Visualization - DISABLED PER USER REQUEST
+    # -------------------------------------------------------------------------
+    # try:
+    #     # Import moved inside to avoid circular dependencies if any, 
+    #     # but we should log clearly if it fails.
+    #     import volume_profile
+    #     from volume_profile import calculate_volume_profile
+    #     
+    #     # Calculate volume profile
+    #     # User Request: Use strict 200-candle lookback (like NN Training) regardless of visible range.
+    #     # This provides consistent Market Structure context.
+    #     # We use the full 'df' to get the last 200 bars relative to the end of the chart view.
+    #     # The chart view ends at chart_df.index[-1].
+    #     
+    #     last_view_idx = df.index.get_loc(chart_df.index[-1])
+    #     start_vp_idx = max(0, last_view_idx - 200)
+    #     
+    #     # Create a slice for VP calculation (last 200 bars from the current view end)
+    #     vp_source_df = df.iloc[start_vp_idx : last_view_idx + 1]
+    #     
+    #     vp_data = calculate_volume_profile(vp_source_df, num_bins=80)
+    #     
+    #     if vp_data is not None:
+    #         # Add Volume Profile as horizontal bars on a secondary x-axis (Side-by-Side)
+    #         # FORCE VALID LISTS: Convert numpy arrays to python lists to ensure JSON serialization is clean
+    #         vp_x_data = vp_data['profile'].values.tolist()
+    #         vp_y_data = vp_data['bin_centers'].tolist()
+    #         
+    #         fig.add_trace(
+    #             go.Bar(
+    #                 y=vp_y_data,
+    #                 x=vp_x_data,
+    #                 orientation='h',
+    #                 marker=dict(
+    #                     color='cyan', 
+    #                     opacity=0.3, # Low opacity to be subtle
+    #                     line=dict(width=0)
+    #                 ),
+    #                 name='Volume Profile',
+    #                 showlegend=False,
+    #                 xaxis='x99',  # Use safe ID to avoid conflict with subplot axes
+    #                 yaxis='y',
+    #                 hoverinfo='x+y'
+    #             )
+    #         )
+    #         print(f"DEBUG: Volume Profile trace added. Points: {len(vp_x_data)}")
+    #         
+    #     else:
+    #         print("DEBUG: Volume Profile data is None")
+    #
+    #
+    # except ImportError as e:
+    #     print(f"CRITICAL ERROR: volume_profile module not found: {e}")
+    #     # Add a dummy trace to alert the user on the chart
+    #     fig.add_annotation(
+    #         text="Volume Profile Module Missing",
+    #         xref="paper", yref="paper",
+    #         x=0.95, y=0.95, showarrow=False, font=dict(color='red')
+    #     )
+    # except Exception as e:
+    #     print(f"CRITICAL ERROR: Volume Profile generation failed: {e}")
+    #     import traceback
+    #     traceback.print_exc()
 
-    # -------------------------------------------------------------------------
-    # Volume Profile Visualization
-    # -------------------------------------------------------------------------
-    try:
-        from volume_profile import calculate_volume_profile
-        
-        # Calculate volume profile for visible chart range
-        vp_data = calculate_volume_profile(chart_df, num_bins=80)
-        
-        if vp_data is not None:
-            # Add Volume Profile as horizontal bars on a secondary x-axis (Side-by-Side)
-            fig.add_trace(
-                go.Bar(
-                    y=vp_data['bin_centers'],
-                    x=vp_data['profile'].values,
-                    orientation='h',
-                    marker=dict(color='cyan', opacity=0.3, line=dict(width=0)),
-                    name='Volume Profile',
-                    showlegend=False,
-                    xaxis='x99',  # Use safe ID to avoid conflict with subplot axes
-                    yaxis='y',
-                    hoverinfo='x+y'
-                ),
-                row=1, col=1
-            )
-            
-            # Note: We removed the horizontal lines for POC/VAH/VAL as they were cluttering the view.
-            # The profile bars themselves give a better visual representation.
-            
-    except ImportError:
-        print("Warning: volume_profile module not found, skipping VP visualization")
-    except Exception as e:
-        print(f"Warning: Could not add volume profile visualization: {e}")
 
 
     # Add volume bars (standard volume at bottom)
@@ -756,38 +861,108 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
         # Set y-axis range for stochastics
         fig.update_yaxes(range=[0, 100], row=config['row'], col=1)
 
-    # Update layout for dark theme with SIDE-BY-SIDE Volume Profile
-    fig.update_layout(
-        template='plotly_dark',
-        autosize=True,
-        showlegend=False,
-        xaxis_rangeslider_visible=False,
-        hovermode='x',
-        paper_bgcolor='#0f0c29',
-        plot_bgcolor='#1a1a2e',
-        font=dict(color='white', size=12),
-        margin=dict(l=40, r=40, t=10, b=70),
-        dragmode='pan',
-        uirevision='no_reset',
-        hoverdistance=-1,
-        spikedistance=-1,
+    # -------------------------------------------------------------------------
+    # STRATEGY EXIT VISUALIZATION
+    # -------------------------------------------------------------------------
+    if STRATEGIES_AVAILABLE and 'hybrid_alarm' in chart_df.columns:
+        strategies = {
+            1: ('POC Target', strategy_1, 'circle'),
+            2: ('VAH Exit', strategy_2, 'diamond'),
+            3: ('LVN Accel', strategy_3, 'star'),
+            4: ('Multi-Tier', strategy_4, 'square'),
+            5: ('Trail Stop', strategy_5, 'triangle-up'),
+            6: ('Vol Diverg', strategy_6, 'x')
+        }
         
-        # Main X-axis (shared)
-        xaxis=dict(
-            domain=[0, 0.85], # Main chart + indicators take 85% width
-            anchor='y'
-        ),
-        # Volume Profile X-axis (Unique ID)
-        xaxis99=dict(
-            domain=[0.86, 1.0], # Volume Profile takes right 14%
-            anchor='y',
-            showticklabels=False,
-            visible=True,
-            showgrid=False
-        )
+        # Find entry signals in the visible chart
+        entry_indices = np.where(chart_df['hybrid_alarm'] == True)[0]
+        
+        # We need to simulate trades for these entries
+        # Note: execute_trade takes the whole DF usually, but here we pass chart_df 
+        # which means it can only see what's visible. This is fine for visualization 
+        # as long as we understand the limitation (can't see future if zoomed in past).
+        # Actually, chart_df is a Slice. Indicies are relative to slice.
+        # But execute_trade expects DataFrame.
+        
+        t_strat_loop_start = time.time()
+        for strat_id, (name, module, symbol_marker) in strategies.items():
+            exit_points_x = []
+            exit_points_y = []
+            hover_texts = []
+            marker_colors = []
+            
+            is_active = (strat_id == exit_strategy_id)
+            if not is_active:
+                continue # Skip background strategies for performance
+                
+            base_color = '#00f2fe'
+            opacity = 1.0
+            size = 12
+            
+            for entry_idx in entry_indices:
+                try:
+                    # Run strategy
+                    # Pass a copy to avoid side effects? No need.
+                    # Balance 10000 dummy
+                    trade = module.execute_trade(chart_df, entry_idx, 10000, precise=False)
+                    
+                    if trade['reason'] != 'VP_ERROR' and trade['exit_idx'] != entry_idx:
+                        exit_points_x.append(trade['exit_time'])
+                        exit_points_y.append(trade['exit_price'])
+                        
+                        pnl_str = f"{trade['pnl_pct']:.2f}%"
+                        color = '#00ff88' if trade['pnl_pct'] > 0 else '#ff3366'
+                        if not is_active: color = base_color # Greyscale for inactive
+                        
+                        marker_colors.append(color)
+                        hover_texts.append(f"{name} Exit<br>PnL: {pnl_str}<br>Reason: {trade['reason']}")
+                        
+                except Exception as e:
+                    # print(f"Strat {name} error: {e}")
+                    pass
+            
+            if exit_points_x:
+                fig.add_trace(
+                    go.Scatter(
+                        x=exit_points_x,
+                        y=exit_points_y,
+                        mode='markers',
+                        name=f"{name} Exits",
+                        marker=dict(
+                            symbol=symbol_marker,
+                            size=size,
+                            color=marker_colors,
+                            line=dict(width=1, color='white') if is_active else dict(width=0),
+                            opacity=opacity
+                        ),
+                        hovertext=hover_texts,
+                        hoverinfo='text'
+                    ),
+                    row=1, col=1
+                )
+
+    # -------------------------------------------------------------------------
+    # FINAL LAYOUT AND MARKER POLISHING
+    # -------------------------------------------------------------------------
+    
+    # Restore Dark Theme
+    fig.update_layout(
+         template='plotly_dark',
+         autosize=True,
+         showlegend=False,
+         xaxis_rangeslider_visible=False,
+         hovermode='x',
+         paper_bgcolor='#0f0c29',
+         plot_bgcolor='#1a1a2e',
+         font=dict(color='white', size=12),
+         margin=dict(l=40, r=40, t=10, b=70),
+         dragmode='pan',
+         uirevision='no_reset',
+         hoverdistance=20, # Only activate when close (default)
+         spikedistance=20,
     )
 
-    # Update all x-axes
+    # 1. Standard Axis Formatting (Dates)
     fig.update_xaxes(
         showgrid=True,
         gridcolor='#333333',
@@ -803,26 +978,101 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
         type='date'
     )
     
-    # Explicitly enable tick labels on the bottom row (row 6)
+    # Enable tick labels on the bottom row (row 6)
     fig.update_xaxes(showticklabels=True, row=6, col=1)
 
+    # Force 100% width for all standard subplots (VP removed from main chart)
+    layout_update = {}
+    for i in range(1, 7):
+        suffix = "" if i == 1 else str(i)
+        key = f"xaxis{suffix}"
+        layout_update[key] = dict(domain=[0, 1.0], type='date')
+    fig.update_layout(layout_update)
 
-    # Enable auto-range for price chart (row 1) and volume (row 2)
-    fig.update_yaxes(
-        autorange=True,
-        fixedrange=False,
-        row=1, col=1
-    )  # Price chart - auto scale
+    # 2. Add POC/HVN/LVN Markers (Do this LAST to avoid axis pollution during layout updates)
+    max_vp_vol = 100
+    try:
+        # Find the Volume Profile trace we added earlier
+        vp_trace = None
+        for trace in fig['data']:
+            if trace['name'] == 'Volume Profile':
+                vp_trace = trace
+                max_vp_vol = max(list(trace['x'])) if trace['x'] else 100
+                break
+        
+        # If we have volume profile data in the local scope variables (from earlier in function)
+        # we can use it to add the extra lines
+        if 'vp_data' in locals() and vp_data is not None:
+            # Helper for line segments
+            def _seg(levels, mx):
+                xs, ys = [], []
+                for p in levels:
+                    xs.extend([0, mx, None])
+                    ys.extend([p, p, None])
+                return xs, ys
 
-    fig.update_yaxes(
-        autorange=True,
-        fixedrange=False,
-        rangemode='tozero',
-        row=2, col=1
-    )  # Volume - auto scale
+            # POC
+            if vp_data.get('poc_price'):
+                fig.add_trace(go.Scatter(
+                    x=[0, max_vp_vol], y=[vp_data['poc_price'], vp_data['poc_price']],
+                    mode='lines', line=dict(color='red', width=2),
+                    name='Point of Control', xaxis='x99', yaxis='y'
+                ))
+            
+            # HVN
+            if vp_data.get('hvn_prices'):
+                hx, hy = _seg(vp_data['hvn_prices'], max_vp_vol)
+                fig.add_trace(go.Scatter(
+                    x=hx, y=hy, mode='lines', 
+                    line=dict(color='rgba(0, 255, 0, 0.5)', width=1, dash='dot'),
+                    name='HVN', xaxis='x99', yaxis='y', showlegend=False
+                ))
+
+            # LVN
+            if vp_data.get('lvn_prices'):
+                lx, ly = _seg(vp_data['lvn_prices'], max_vp_vol)
+                fig.add_trace(go.Scatter(
+                    x=lx, y=ly, mode='lines', 
+                    line=dict(color='rgba(255, 165, 0, 0.5)', width=1, dash='dot'),
+                    name='LVN', xaxis='x99', yaxis='y', showlegend=False
+                ))
+    except Exception as e:
+        print(f"DEBUG: Failed to add markers: {e}")
+
+    # 3. Dedicated Volume Profile Axis (x99)
+    # This must OVERRIDE the global update_xaxes settings
+    fig.update_layout(
+        xaxis99=dict(
+            domain=[0.855, 1.0],
+            anchor='y',
+            type='linear',
+            autorange=True,     # Let Plotly scale it to fit the 15% width
+            showticklabels=False,
+            visible=True,
+            showgrid=False,
+            zeroline=False,
+            side='bottom',
+            overlaying=None 
+        )
+    )
+
+    # Final scaling for price and volume
+    fig.update_yaxes(autorange=True, fixedrange=False, row=1, col=1)
+    fig.update_yaxes(autorange=True, fixedrange=False, rangemode='tozero', row=2, col=1)
 
     # Return as JSON
-    return fig.to_json()
+    t_plot = time.time() - t_start - t_load - t_alarms
+    json_result = fig.to_json()
+    t_json = time.time() - t_start - t_load - t_alarms - t_plot
+    
+    print(f"DEBUG: generate_chart_data Breakdown:")
+    print(f"  - Load CSV:    {t_load:.4f}s")
+    print(f"  - Alarms/NN:   {t_alarms:.4f}s")
+    print(f"  - Plotly Fig:  {t_plot:.4f}s")
+    print(f"  - JSON Serial: {t_json:.4f}s")
+    print(f"  - Total:       {time.time() - t_start:.4f}s")
+    
+    return json_result
 
 def get_chart_metadata(filepath):
     """Get metadata about the chart data"""

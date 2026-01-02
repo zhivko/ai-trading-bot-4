@@ -3,8 +3,74 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional
 
 
+def get_raw_volume_histogram(df: pd.DataFrame, start_idx: int, end_idx: int, num_bins: int = 80, verbose: bool = False) -> np.ndarray:
+    """
+    Lightning fast vectorized histogram using only Close prices.
+    Used for NN inference loop where performance is the top priority.
+    """
+    slice_df = df.iloc[start_idx:end_idx]
+    if slice_df.empty:
+        return np.zeros(num_bins)
+    
+    p_min = slice_df['low'].min()
+    p_max = slice_df['high'].max()
+    
+    if p_min == p_max:
+        return np.zeros(num_bins)
+        
+    counts, _ = np.histogram(slice_df['close'].values, bins=num_bins, range=(p_min, p_max), weights=slice_df['volume'].values)
+    
+    if verbose:
+        print(f"DEBUG FAST HISTOGRAM: {len(slice_df)} candles, {num_bins} bins")
+        
+    return counts
+
+
+def get_precise_volume_histogram(df: pd.DataFrame, start_idx: int, end_idx: int, num_bins: int = 80, verbose: bool = False) -> np.ndarray:
+    """
+    High precision histogram that distributes volume across the entire candle range (Low to High).
+    Used for marker-click details where visual accuracy is more important than speed.
+    """
+    slice_df = df.iloc[start_idx:end_idx]
+    if slice_df.empty:
+        return np.zeros(num_bins)
+    
+    p_min = slice_df['low'].min()
+    p_max = slice_df['high'].max()
+    
+    if p_min == p_max:
+        return np.zeros(num_bins)
+    
+    bins = np.linspace(p_min, p_max, num_bins + 1)
+    counts = np.zeros(num_bins)
+    
+    # Python loop is acceptable here because we only do it ONCE for a single marker click
+    for idx in range(len(slice_df)):
+        candle_low = slice_df.iloc[idx]['low']
+        candle_high = slice_df.iloc[idx]['high']
+        candle_volume = slice_df.iloc[idx]['volume']
+        
+        low_bin = np.digitize(candle_low, bins) - 1
+        high_bin = np.digitize(candle_high, bins) - 1
+        
+        low_bin = max(0, min(low_bin, num_bins - 1))
+        high_bin = max(0, min(high_bin, num_bins - 1))
+        
+        bins_touched = high_bin - low_bin + 1
+        if bins_touched > 0:
+            volume_per_bin = candle_volume / bins_touched
+            counts[low_bin:high_bin+1] += volume_per_bin
+    
+    if verbose:
+        bins_with_volume = np.sum(counts > 0)
+        print(f"DEBUG PRECISE HISTOGRAM: {len(slice_df)} candles, {num_bins} bins")
+        print(f"DEBUG PRECISE HISTOGRAM: Bins with volume: {bins_with_volume}/{num_bins}")
+    
+    return counts
+
 def calculate_volume_profile(df: pd.DataFrame, start_idx: Optional[int] = None, 
-                            end_idx: Optional[int] = None, num_bins: int = 80) -> Dict:
+                            end_idx: Optional[int] = None, num_bins: int = 80, 
+                            verbose: bool = False, precise: bool = False) -> Dict:
     """
     Calculate volume profile for a given price range
     
@@ -46,11 +112,13 @@ def calculate_volume_profile(df: pd.DataFrame, start_idx: Optional[int] = None,
         bins = np.linspace(p_min, p_max, num_bins + 1)
         bin_centers = (bins[:-1] + bins[1:]) / 2
         
-        # Assign each candle's close price to a bin
-        vp_df['price_bin'] = pd.cut(vp_df['close'], bins, labels=False, include_lowest=True)
-        
-        # Sum volume for each bin
-        volume_profile = vp_df.groupby('price_bin')['volume'].sum().reindex(range(num_bins), fill_value=0)
+        # Optimized Histogram calculation
+        if precise:
+            volume_profile_values = get_precise_volume_histogram(df, start_idx, end_idx, num_bins, verbose=verbose)
+        else:
+            volume_profile_values = get_raw_volume_histogram(df, start_idx, end_idx, num_bins, verbose=verbose)
+            
+        volume_profile = pd.Series(volume_profile_values, index=range(num_bins))
         
         # Calculate POC (Point of Control) - highest volume price
         poc_idx = volume_profile.idxmax()
@@ -60,12 +128,19 @@ def calculate_volume_profile(df: pd.DataFrame, start_idx: Optional[int] = None,
         # Calculate Value Area (70% of total volume)
         vah, val = calculate_value_area(volume_profile, bin_centers, value_area_pct=70)
         
-        # Find HVNs and LVNs
+        # Find HVNs, LVNs, and CLUSTERS (Peaks)
         hvn_prices = find_hvns(volume_profile, bin_centers, threshold_percentile=75)
         lvn_prices = find_lvns(volume_profile, bin_centers, threshold_percentile=25)
+        cluster_prices = find_volume_clusters(volume_profile, bin_centers)
+        
+        # Generate smoothed profile for visualization (fast method)
+        # GMM fitting only happens on marker click, not here
+        from scipy.ndimage import gaussian_filter1d
+        profile_smooth = gaussian_filter1d(volume_profile.values.astype(float), sigma=2)
         
         return {
             'profile': volume_profile,
+            'profile_smooth': profile_smooth,
             'bin_centers': bin_centers,
             'bins': bins,
             'poc_price': poc_price,
@@ -74,6 +149,7 @@ def calculate_volume_profile(df: pd.DataFrame, start_idx: Optional[int] = None,
             'val': val,
             'hvn_prices': hvn_prices,
             'lvn_prices': lvn_prices,
+            'cluster_prices': cluster_prices,
             'total_volume': volume_profile.sum()
         }
     
@@ -100,29 +176,130 @@ def find_hvns(volume_profile: pd.Series, bin_centers: np.ndarray,
     hvn_prices = [bin_centers[idx] for idx in hvn_indices]
     return hvn_prices
 
+def find_volume_clusters(volume_profile: pd.Series, bin_centers: np.ndarray) -> List[float]:
+    """
+    Find major volume clusters (peaks) in the profile using local maxima.
+    Returns the price levels of these cluster centers.
+    """
+    try:
+        from scipy.signal import find_peaks
+        # Find peaks with some prominence to ignore noise
+        # Normalize volume for prominence check
+        vol_norm = volume_profile.values / volume_profile.values.max()
+        peaks, _ = find_peaks(vol_norm, prominence=0.05, distance=3) # Distance prevents adjacent bins
+        
+        cluster_centers = [bin_centers[i] for i in peaks]
+        return cluster_centers
+    except ImportError:
+        # Fallback: simple local maxima
+        vals = volume_profile.values
+        peaks = []
+        for i in range(1, len(vals)-1):
+            if vals[i] > vals[i-1] and vals[i] > vals[i+1]:
+                # Simple peak
+                peaks.append(bin_centers[i])
+        return peaks
+
 
 def find_lvns(volume_profile: pd.Series, bin_centers: np.ndarray, 
               threshold_percentile: float = 25) -> List[float]:
     """
-    Find Low Volume Nodes (prices with volume < threshold percentile)
+    Find Low Volume Nodes using Adaptive Gaussian Mixture Model
+    Automatically determines optimal number of peaks (2-5) using BIC
+    Finds all minima between adjacent peaks
     
     Args:
         volume_profile: Series of volume per bin
         bin_centers: Array of price levels
-        threshold_percentile: Percentile threshold (default 25)
+        threshold_percentile: Used to filter weak minima
     
     Returns:
-        List of LVN prices
+        List of LVN prices (minima between Gaussian peaks)
     """
-    # Filter out zero-volume bins to avoid noise
-    non_zero_profile = volume_profile[volume_profile > 0]
+    from sklearn.mixture import GaussianMixture
+    from scipy.optimize import minimize_scalar
     
-    if len(non_zero_profile) == 0:
+    # Filter out completely empty profiles
+    if volume_profile.sum() == 0:
         return []
     
-    threshold = np.percentile(non_zero_profile.values, threshold_percentile)
-    lvn_indices = volume_profile[(volume_profile > 0) & (volume_profile <= threshold)].index
-    lvn_prices = [bin_centers[idx] for idx in lvn_indices]
+    # Prepare data for GMM: weighted by volume
+    prices_weighted = []
+    for i, vol in enumerate(volume_profile.values):
+        if vol > 0:
+            count = int(vol / volume_profile.sum() * 1000)
+            prices_weighted.extend([bin_centers[i]] * max(1, count))
+    
+    if len(prices_weighted) < 10:
+        return []
+    
+    X = np.array(prices_weighted).reshape(-1, 1)
+    
+    # Adaptive component selection using BIC (2-5 peaks)
+    best_gmm = None
+    best_bic = np.inf
+    best_n = 2
+    
+    for n_components in range(2, 6):  # Test 2-5 peaks
+        try:
+            gmm = GaussianMixture(n_components=n_components, covariance_type='full', random_state=42, max_iter=100)
+            gmm.fit(X)
+            bic = gmm.bic(X)
+            if bic < best_bic:
+                best_bic = bic
+                best_gmm = gmm
+                best_n = n_components
+        except:
+            continue
+    
+    if best_gmm is None:
+        return []
+    
+    # Get peaks sorted by price
+    peaks = sorted(best_gmm.means_.flatten())
+    
+    # Define GMM PDF
+    def gmm_pdf(x):
+        return np.exp(best_gmm.score_samples([[x]]))[0]
+    
+    # Find minima between ALL adjacent peaks
+    lvn_prices = []
+    for i in range(len(peaks) - 1):
+        result = minimize_scalar(lambda x: gmm_pdf(x), bounds=(peaks[i], peaks[i+1]), method='bounded')
+        lvn_prices.append(result.x)
+    
+    # Filter: only keep minima that are between bins with actual volume
+    # AND below threshold percentile
+    non_zero_profile = volume_profile[volume_profile > 0]
+    if len(non_zero_profile) > 0:
+        threshold = np.percentile(non_zero_profile.values, threshold_percentile)
+        # Check actual volume at each LVN
+        valid_lvns = []
+        for lvn in lvn_prices:
+            idx = np.argmin(np.abs(bin_centers - lvn))
+            
+            # CRITICAL FIX: Ensure LVN is between two non-zero volume bins
+            # Find nearest non-zero bins on left and right
+            left_idx = idx
+            while left_idx >= 0 and volume_profile.iloc[left_idx] == 0:
+                left_idx -= 1
+            
+            right_idx = idx
+            while right_idx < len(volume_profile) and volume_profile.iloc[right_idx] == 0:
+                right_idx += 1
+            
+            # Only accept LVN if it's between two actual volume clusters
+            if left_idx >= 0 and right_idx < len(volume_profile):
+                # Check if the LVN bin (or nearest non-zero bin) is below threshold
+                if volume_profile.iloc[idx] <= threshold:
+                    valid_lvns.append(lvn)
+                elif left_idx != idx and volume_profile.iloc[left_idx] <= threshold:
+                    valid_lvns.append(lvn)
+                elif right_idx != idx and volume_profile.iloc[right_idx] <= threshold:
+                    valid_lvns.append(lvn)
+        
+        return valid_lvns
+    
     return lvn_prices
 
 

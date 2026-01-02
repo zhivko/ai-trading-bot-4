@@ -405,43 +405,90 @@
             </div>
 
             <div class="panel-section">
-                <span class="panel-title">Information</span>
-                <div class="info-card">
-                    <div class="info-card-label">Total History</div>
-                    <div class="info-card-value">{{ total_candles }} candles available</div>
+                <span class="panel-title">Trade Setup</span>
+                <div id="strategyPlaceholder" class="strategy-placeholder">
+                    Click on a marker to see details
                 </div>
-                <div class="info-card">
-                    <div class="info-card-label">Last Updated</div>
-                    <div class="info-card-value" id="lastUpdatedTS">{{ last_candle }}</div>
+            </div>
+
+            <div id="strategyPreview" class="strategy-details" style="display: none;">
+                <div class="strat-header" id="stratName">Strategy</div>
+                <p id="stratDesc" style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;"></p>
+
+                <div class="strat-grid">
+                    <!-- NEW: Marker Info -->
+                    <div class="strat-item full-width">
+                        <span class="label">Marker Type</span>
+                        <span class="value cyan" id="markerType">--</span>
+                    </div>
+                    <div class="strat-item full-width">
+                        <span class="label">Marker Time</span>
+                        <span class="value" id="markerTime">--</span>
+                    </div>
+
+                    <div class="strat-item">
+                        <span class="label">Entry Price</span>
+                        <span class="value gold" id="previewEntry">--</span>
+                    </div>
+                    <div class="strat-item" id="nnConfContainer">
+                        <span class="label">NN Confidence</span>
+                        <span class="value cyan" id="previewNNConf">--</span>
+                    </div>
+                    <div class="strat-item">
+                        <span class="label">Stop Loss</span>
+                        <span class="value split-val">
+                            <span class="danger" id="previewSL">--</span>
+                            <span class="sub-val" id="previewSLPct">(-%)</span>
+                        </span>
+                    </div>
+                    <div class="strat-item full-width">
+                        <span class="label">Next LVN Target</span>
+                        <span class="value neon-green" id="previewTP">--</span>
+                    </div>
+                </div>
+
+                <div class="vp-mini-chart" id="vpMiniChart"></div>
+            </div>
+
+            <div class="panel-section">
+                <span class="panel-title">Stats & Controls</span>
+                <div class="control-group">
+                    <label>Visible Candles</label>
+                    <select id="candleCount" onchange="loadChart()">
+                        <option value="50">50</option>
+                        <option value="100" selected>100</option>
+                        <option value="200">200</option>
+                        <option value="500">500</option>
+                        <option value="1000">1000</option>
+                    </select>
+                </div>
+
+                <!-- NN Confidence Threshold Slider -->
+                <div class="control-group">
+                    <label>NN Confidence: <span id="thresholdValue" style="color: #00f3ff">30%</span></label>
+                    <input type="range" id="nnThreshold" min="0" max="99" value="30"
+                        oninput="document.getElementById('thresholdValue').textContent = this.value + '%'"
+                        onchange="loadChart()" style="width: 100%; accent-color: #00f3ff;">
+                </div>
+                <div class="control-group">
+                    <label>Exit Strategy</label>
+                    <select id="exitStrategy" onchange="loadChart()"
+                        style="width: 100%; padding: 8px; background: #1a1a2e; color: #00f3ff; border: 1px solid #333; border-radius: 4px;">
+                        <option value="1">1. POC Target</option>
+                        <option value="2">2. VAH Exit</option>
+                        <option value="3" selected>3. LVN Accel (Recommended)</option>
+                        <option value="4">4. Multi-Tier</option>
+                        <option value="5">5. Trail Stop</option>
+                        <option value="6">6. Vol Diverg</option>
+                    </select>
                 </div>
             </div>
 
             <div class="panel-section">
-                <span class="panel-title">Controls</span>
-                <div class="controls-panel">
-                    <div class="control-group">
-                        <label for="candleCount">Visible Candles</label>
-                        <select id="candleCount" onchange="loadChart()">
-                            <option value="50">50</option>
-                            <option value="100" selected>100</option>
-                            <option value="200">200</option>
-                            <option value="500">500</option>
-                            <option value="1000">1000</option>
-                        </select>
-                    </div>
-                    <div class="control-group">
-                        <label for="nnThreshold">NN Confidence: <span id="thresholdValue">5%</span></label>
-                        <input type="range" id="nnThreshold" min="1" max="99" value="5"
-                            oninput="updateThresholdDisplay(this.value)" onchange="loadChart()"
-                            style="width: 100%; accent-color: #00f2fe;">
-                        <div
-                            style="display: flex; justify-content: space-between; font-size: 0.7em; color: #666; margin-top: 2px;">
-                            <span>More Patterns</span>
-                            <span>High Precision</span>
-                        </div>
-                    </div>
-                    <button class="refresh-btn" onclick="refreshChart(true)">🔄 Force Re-sync</button>
-                </div>
+                <span class="panel-title">Strategy Description</span>
+                <textarea id="strategyDescription"
+                    style="width: 100%; height: 100px; background: rgba(255, 255, 255, 0.05); color: #ddd; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 10px; font-size: 0.85em; resize: none;"
+                    readonly>Strategy 3: LVN Acceleration detects price movement towards Low Volume Nodes (gaps) in the profile.</textarea>
             </div>
 
             <div class="panel-section">
@@ -513,6 +560,141 @@
 
         let relayoutTimer = null;
 
+        async function loadStrategyPreview(timestamp) {
+            try {
+                document.getElementById('strategyPlaceholder').style.display = 'none';
+                document.getElementById('strategyPreview').style.display = 'block';
+
+                // Show sidebar if hidden
+                const panel = document.getElementById('sidePanel');
+                if (panel.classList.contains('hidden')) {
+                    panel.classList.remove('hidden');
+                    setTimeout(() => {
+                        const chartDiv = document.getElementById('chart');
+                        if (chartDiv && typeof Plotly !== 'undefined') {
+                            Plotly.Plots.resize(chartDiv);
+                        }
+                    }, 350);
+                }
+
+                const strategyId = document.getElementById('exitStrategy').value;
+                const response = await fetch(`/api/strategy_preview/${strategyId}/${timestamp}?symbol=${symbol}&timeframe=${timeframe}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    document.getElementById('stratDesc').textContent = data.error;
+                    return;
+                }
+
+                // Update UI
+                document.getElementById('stratName').textContent = "Strategy " + strategyId;
+                document.getElementById('stratDesc').textContent = data.description;
+                document.getElementById('strategyDescription').value = data.description;
+
+                if (data.entry_price) {
+                    document.getElementById('previewEntry').textContent = data.entry_price.toLocaleString();
+                    document.getElementById('previewSL').textContent = data.stop_loss.toLocaleString();
+                    document.getElementById('previewSLPct').textContent = `(${data.stop_loss_pct.toFixed(1)}%)`;
+
+                    if (data.nn_confidence !== undefined) {
+                        document.getElementById('nnConfContainer').style.display = 'flex';
+                        document.getElementById('previewNNConf').textContent = (data.nn_confidence * 100).toFixed(1) + '%';
+                    } else {
+                        document.getElementById('nnConfContainer').style.display = 'none';
+                    }
+
+                    if (data.take_profit_candidates && data.take_profit_candidates.length > 0) {
+                        document.getElementById('previewTP').textContent = data.take_profit_candidates[0].toLocaleString();
+                    } else {
+                        document.getElementById('previewTP').textContent = "None Found";
+                    }
+                }
+
+                // Render Mini Volume Profile
+                if (data.vp_data) {
+                    // Create traces array
+                    const traces = [
+                        // Filled area chart (eliminates gaps)
+                        {
+                            y: data.vp_data.prices,
+                            x: data.vp_data.volumes,
+                            type: 'scatter',
+                            mode: 'lines',
+                            fill: 'tozerox',
+                            fillcolor: 'rgba(0, 242, 254, 0.3)',
+                            line: {
+                                color: 'rgba(0, 242, 254, 0.8)',
+                                width: 1
+                            },
+                            name: 'Volume'
+                        }
+                    ];
+
+                    // Add smoothed Gaussian curve if available
+                    if (data.vp_data.volumes_smooth) {
+                        traces.push({
+                            y: data.vp_data.prices,
+                            x: data.vp_data.volumes_smooth,
+                            type: 'scatter',
+                            mode: 'lines',
+                            line: {
+                                color: 'rgba(255, 165, 0, 0.8)',  // Orange
+                                width: 2
+                            },
+                            name: 'Smoothed (Gaussian)'
+                        });
+                    }
+
+                    const layout = {
+                        margin: { l: 30, r: 10, t: 10, b: 20 },
+                        paper_bgcolor: 'rgba(0,0,0,0)',
+                        plot_bgcolor: 'rgba(0,0,0,0)',
+                        showlegend: false,
+                        xaxis: { showgrid: false, showticklabels: false, zeroline: false },
+                        yaxis: { showgrid: false, showticklabels: true, tickfont: { size: 9, color: '#888' } },
+                        shapes: [
+                            // Entry Line
+                            {
+                                type: 'line', x0: 0, x1: 1, xref: 'paper',
+                                y0: data.entry_price, y1: data.entry_price,
+                                line: { color: 'yellow', width: 1, dash: 'dash' }
+                            },
+                            // Stop Loss
+                            {
+                                type: 'line', x0: 0, x1: 1, xref: 'paper',
+                                y0: data.stop_loss, y1: data.stop_loss,
+                                line: { color: 'red', width: 1, dash: 'dot' }
+                            },
+                            // POC
+                            {
+                                type: 'line', x0: 0, x1: 1, xref: 'paper',
+                                y0: data.vp_data.poc, y1: data.vp_data.poc,
+                                line: { color: 'white', width: 1, opacity: 0.5 }
+                            }
+                        ]
+                    };
+
+                    // Add TP Lines
+                    if (data.take_profit_candidates) {
+                        data.take_profit_candidates.forEach(tp => {
+                            layout.shapes.push({
+                                type: 'line', x0: 0, x1: 1, xref: 'paper',
+                                y0: tp, y1: tp,
+                                line: { color: 'lime', width: 1, dash: 'dot', opacity: 0.5 }
+                            });
+                        });
+                    }
+
+                    Plotly.newPlot('vpMiniChart', traces, layout, { displayModeBar: false, staticPlot: true });
+                }
+
+            } catch (e) {
+                console.error("Preview Error", e);
+            }
+        }
+
+        let chartAbortController = null;
+
         async function loadChart(startDate = null, endDate = null) {
             const chartDiv = document.getElementById('chart');
             // Only show full loading spinner if it's the initial load
@@ -523,17 +705,36 @@
             try {
                 let url = `/api/chart/${symbol}/${timeframe}`;
                 const nnThreshold = document.getElementById('nnThreshold').value;
+                const exitStrategy = document.getElementById('exitStrategy').value;
 
                 if (startDate && endDate) {
-                    // Add buffer to request to allow for some panning without immediately hitting edge
-                    // But for now, strictly enabling requested range + small buffer is safer
-                    url += `?start=${startDate}&end=${endDate}&nn_threshold=${nnThreshold}`;
+                    // Quantize/Snap timestamps to align with cache buckets (reduce server load)
+                    let tfMs = 900000; // Default 15m
+                    if (timeframe === '1h') tfMs = 3600000;
+                    if (timeframe === '4h') tfMs = 14400000;
+                    if (timeframe === '1d') tfMs = 86400000;
+                    if (timeframe === '5m') tfMs = 300000;
+                    if (timeframe === '1m') tfMs = 60000;
+
+                    // Snap to nearest bucket (floor start, ceil end for safety)
+                    const qs = Math.floor(new Date(startDate).getTime() / tfMs) * tfMs;
+                    const qe = Math.ceil(new Date(endDate).getTime() / tfMs) * tfMs;
+
+                    const qStartStr = new Date(qs).toISOString();
+                    const qEndStr = new Date(qe).toISOString();
+
+                    url += `?start=${qStartStr}&end=${qEndStr}&nn_threshold=${nnThreshold}&exit_strategy=${exitStrategy}`;
                 } else {
                     const candleCount = document.getElementById('candleCount').value;
-                    url += `?candles=${candleCount}&nn_threshold=${nnThreshold}`;
+                    url += `?candles=${candleCount}&nn_threshold=${nnThreshold}&exit_strategy=${exitStrategy}`;
                 }
 
-                const response = await fetch(url);
+                if (chartAbortController) {
+                    chartAbortController.abort();
+                }
+                chartAbortController = new AbortController();
+
+                const response = await fetch(url, { signal: chartAbortController.signal });
 
                 if (!response.ok) {
                     throw new Error('Failed to load chart data');
@@ -547,7 +748,10 @@
                     // Update header if we have new data
                     if (rawTraceData.x && rawTraceData.x.length > 0) {
                         const latest = rawTraceData.x[rawTraceData.x.length - 1];
-                        document.getElementById('lastUpdatedTS').textContent = latest.replace('T', ' ');
+                        const lastUpdatedEl = document.getElementById('lastUpdatedTS');
+                        if (lastUpdatedEl) {
+                            lastUpdatedEl.textContent = latest.replace('T', ' ');
+                        }
                         lastKnownTimestamp = latest.replace('T', ' ');
                     }
                 }
@@ -583,15 +787,42 @@
                     scrollZoom: true
                 });
 
-
                 chartDiv.removeAllListeners('plotly_relayout');
                 chartDiv.on('plotly_relayout', handleRelayout);
+
+                // CLICK HANDLER FOR INTERACTIVE STRATEGY PREVIEW
+                chartDiv.removeAllListeners('plotly_click');
+                chartDiv.on('plotly_click', function (data) {
+                    if (data.points && data.points.length > 0) {
+                        const point = data.points[0];
+                        const timestamp = point.x;
+
+                        // Extract Marker Type
+                        let markerName = "Unknown Marker";
+                        if (point.data && point.data.name) {
+                            markerName = point.data.name;
+                        }
+
+                        console.log(`Clicked: ${timestamp} (${markerName})`);
+
+                        // Update UI immediately
+                        document.getElementById('markerType').textContent = markerName;
+                        document.getElementById('markerTime').textContent = timestamp.replace('T', ' ');
+
+                        loadStrategyPreview(timestamp);
+                    }
+                });
+
 
                 if (!startDate) {
                     setTimeout(() => autoRangeY(chartDiv), 500);
                 }
 
             } catch (error) {
+                if (error.name === 'AbortError') {
+                    console.log('Chart request aborted');
+                    return;
+                }
                 if (!startDate) {
                     chartDiv.innerHTML = `<div class="error">Error loading chart: ${error.message}</div>`;
                 }

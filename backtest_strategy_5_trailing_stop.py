@@ -2,7 +2,21 @@ import pandas as pd
 import numpy as np
 from volume_profile import calculate_volume_profile
 
-def execute_trade(df, entry_idx, current_balance, position_size_pct=0.05):
+def calculate_atr(df, period=14):
+    """Calculate Average True Range (ATR)"""
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+    return atr
+
+def execute_trade(df, entry_idx, current_balance, position_size_pct=1.0, precise: bool = False):
     """
     Execute a single trade using Strategy 5: Dynamic Trailing Stop
     Trails stop loss at HVNs below price
@@ -23,8 +37,18 @@ def execute_trade(df, entry_idx, current_balance, position_size_pct=0.05):
     position_usd = current_balance * position_size_pct
     btc_amount = position_usd / entry_price
     
-    # Initial Stop loss
-    current_stop = entry_price * 0.95 # 5% initial stop
+    # Dynamic ATR Initial Stop Loss
+    start_atr = max(0, entry_idx - 20)
+    atr_window = df.iloc[start_atr:entry_idx+1].copy()
+    atr_series = calculate_atr(atr_window, period=14)
+    current_atr = atr_series.iloc[-1]
+    
+    if np.isnan(current_atr) or current_atr == 0:
+        current_atr = entry_price * 0.01
+        
+    atr_multiplier = 4.5
+    stop_distance = current_atr * atr_multiplier
+    current_stop = entry_price - stop_distance
     max_hold_candles = 24 * 4 * 7  # 7 days (15m candles)
     
     # Simulation state
@@ -52,8 +76,8 @@ def execute_trade(df, entry_idx, current_balance, position_size_pct=0.05):
             break
             
         # Strategy Logic: Update VP every 20 bars to find new support levels
-        if i - vp_last_updated >= 20:
-            vp = calculate_volume_profile(df, start_idx=max(0, i-200), end_idx=i)
+        if i - vp_last_updated >= 10:
+            vp = calculate_volume_profile(df, start_idx=max(0, i-200), end_idx=i, precise=precise)
             if vp:
                 hvn_prices = vp['hvn_prices']
                 # Try to move stop up

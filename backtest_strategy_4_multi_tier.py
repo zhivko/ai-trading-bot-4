@@ -2,7 +2,21 @@ import pandas as pd
 import numpy as np
 from volume_profile import calculate_volume_profile
 
-def execute_trade(df, entry_idx, current_balance, position_size_pct=0.05):
+def calculate_atr(df, period=14):
+    """Calculate Average True Range (ATR)"""
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+    return atr
+
+def execute_trade(df, entry_idx, current_balance, position_size_pct=0.05, precise: bool = False):
     """
     Execute a single trade using Strategy 4: Multi-Tier Scaling
     Exits: 33% at 1st HVN, 33% at 2nd HVN, 34% at VAH/POC
@@ -24,13 +38,23 @@ def execute_trade(df, entry_idx, current_balance, position_size_pct=0.05):
     total_btc_amount = total_position_usd / entry_price
     remaining_btc = total_btc_amount
     
-    # Stop loss settings
-    stop_loss_pct = 0.05
-    stop_price = entry_price * (1 - stop_loss_pct)
+    # Dynamic ATR Stop Loss
+    start_atr = max(0, entry_idx - 20)
+    atr_window = df.iloc[start_atr:entry_idx+1].copy()
+    atr_series = calculate_atr(atr_window, period=14)
+    current_atr = atr_series.iloc[-1]
+    
+    if np.isnan(current_atr) or current_atr == 0:
+        current_atr = entry_price * 0.01
+        
+    atr_multiplier = 4.5
+    stop_distance = current_atr * atr_multiplier
+    stop_price = entry_price - stop_distance
+    stop_loss_pct = stop_distance / entry_price
     max_hold_candles = 24 * 4 * 7  # 7 days (15m candles)
     
     # Calculate Volume Profile for targets
-    vp = calculate_volume_profile(df, start_idx=max(0, entry_idx-200), end_idx=entry_idx)
+    vp = calculate_volume_profile(df, start_idx=max(0, entry_idx-200), end_idx=entry_idx, precise=precise)
     
     targets = []
     

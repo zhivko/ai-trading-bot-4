@@ -5,10 +5,18 @@ import re
 from datetime import datetime, timedelta
 import threading
 import time
-from chart_generator import generate_chart_data, get_chart_metadata
+import sys
+from chart_generator import generate_chart_data, get_chart_metadata, get_nn_model
 from data_updater import update_data_files
 
 app = Flask(__name__)
+
+# Pre-load Neural Network Model (STRICT)
+# The app cannot function without the brain.
+print("Pre-loading Neural Network Model...")
+if get_nn_model() is None:
+    print("CRITICAL ERROR: Failed to load Neural Network Model. Terminating...")
+    sys.exit(1)
 
 # Global variable to store available data files
 data_files = []
@@ -114,15 +122,35 @@ def get_chart_data(symbol, timeframe):
         start_date = request.args.get('start')
         end_date = request.args.get('end')
         
-        # Get NN threshold parameter (default 5 - lowered to show more signals)
-        nn_threshold = request.args.get('nn_threshold', 5, type=int)
+        # Get NN threshold parameter (default 30 - baseline)
+        nn_threshold = request.args.get('nn_threshold', 30, type=int)
+        
+        # Get Exit Strategy parameter (default 3 - LVN Accel)
+        exit_strategy = request.args.get('exit_strategy', 3, type=int)
 
         # Generate chart data as JSON
-        chart_json = generate_chart_data(filepath, symbol, timeframe, num_candles, start_date, end_date, nn_threshold)
+        start_time = time.time()
+        chart_json_str = generate_chart_data(filepath, symbol, timeframe, num_candles, start_date, end_date, nn_threshold, exit_strategy)
+        total_time = time.time() - start_time
+        print(f"DEBUG: /api/chart/{symbol}/{timeframe} - Total Generation Time: {total_time:.4f}s")
+
+        # Inject timing info into JSON if it's a valid JSON string
+        try:
+            import json
+            chart_data = json.loads(chart_json_str)
+            if 'metadata' not in chart_data:
+                chart_data['metadata'] = {}
+            chart_data['metadata']['perf_total_sec'] = round(total_time, 4)
+            # Find and extract the internal timings if they were printed to stdout (hard to catch)
+            # or just assume they are for internal logs. 
+            # For now just return the total.
+            chart_json_str = json.dumps(chart_data)
+        except Exception as e:
+            print(f"Warning: Failed to inject timing metadata: {e}")
 
         # Return raw JSON string with correct content type
         from flask import Response
-        return Response(chart_json, mimetype='application/json')
+        return Response(chart_json_str, mimetype='application/json')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -140,6 +168,58 @@ def get_metadata(symbol, timeframe):
         metadata = get_chart_metadata(filepath)
         return jsonify(metadata)
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/strategy_preview/<strategy_id>/<timestamp>')
+def get_strategy_preview(strategy_id, timestamp):
+    """
+    Get detailed trade setup for a specific strategy at a specific time.
+    Used for interactive frontend visualization.
+    """
+    symbol = request.args.get('symbol', 'BTCUSDT')
+    timeframe = request.args.get('timeframe', '15m')
+    
+    filename = f"{symbol}_{timeframe}_data.csv"
+    data_dir = os.path.join(os.path.dirname(__file__), 'data')
+    filepath = os.path.join(data_dir, filename)
+    
+    if not os.path.exists(filepath):
+        return jsonify({'error': 'Data file not found'}), 404
+        
+    try:
+        # Load Data
+        df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+        
+        # Find index for timestamp
+        ts = pd.to_datetime(timestamp)
+        if df.index.tz is None and ts.tz is not None:
+            ts = ts.tz_localize(None)
+            
+        # Get specific candle index
+        # We need exact match or nearest past match
+        try:
+            entry_idx = df.index.get_loc(ts)
+        except KeyError:
+             # Find nearest
+             entry_idx = df.index.searchsorted(ts)
+             if entry_idx >= len(df): entry_idx = len(df) - 1
+        
+        # Dispatch to appropriate strategy module
+        setup_data = {}
+        if str(strategy_id) == '3':
+            import backtest_strategy_3_lvn_acceleration as strat3
+            setup_data = strat3.get_trade_setup(df, entry_idx)
+        else:
+            setup_data = {
+                'error': f"Strategy {strategy_id} preview not implemented yet",
+                'description': "Preview not available for this strategy."
+            }
+            
+        return jsonify(setup_data)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/latest/<symbol>/<timeframe>')
