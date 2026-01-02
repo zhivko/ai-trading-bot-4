@@ -691,7 +691,7 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
                     marker=dict(color='cyan', opacity=0.3, line=dict(width=0)),
                     name='Volume Profile',
                     showlegend=False,
-                    xaxis='x2',
+                    xaxis='x99',  # Use safe ID to avoid conflict with subplot axes
                     yaxis='y',
                     hoverinfo='x+y'
                 ),
@@ -772,16 +772,18 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
         hoverdistance=-1,
         spikedistance=-1,
         
-        # Define layouts for axes to create side-by-side effect
+        # Main X-axis (shared)
         xaxis=dict(
-            domain=[0, 0.85], # Main chart takes 85% width
+            domain=[0, 0.85], # Main chart + indicators take 85% width
             anchor='y'
         ),
-        xaxis2=dict(
+        # Volume Profile X-axis (Unique ID)
+        xaxis99=dict(
             domain=[0.86, 1.0], # Volume Profile takes right 14%
             anchor='y',
             showticklabels=False,
-            visible=True
+            visible=True,
+            showgrid=False
         )
     )
 
