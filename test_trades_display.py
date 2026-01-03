@@ -14,7 +14,7 @@ mock_tracking = {
         'pnl_value': 0.85,  # (90620.3 - 90450) * 0.005 approx
         'pnl_percent': 0.18,
         'lowest_price': 90400.0,
-        'open_time': '12:30:00 04-01'
+        'open_time': '04.01.2026 12:30:00'
     },
     'ETH-USDT': {
         'side': 'LONG',
@@ -25,7 +25,7 @@ mock_tracking = {
         'pnl_value': -4.0,
         'pnl_percent': -1.78,
         'highest_price': 2260.0,
-        'open_time': '10:00:00 04-01'
+        'open_time': '04.01.2026 10:00:00'
     }
 }
 

@@ -1430,7 +1430,7 @@ async def monitor_trailing_stops_loop():
                         # createdAt is usually ms
                         utc_dt = datetime.utcfromtimestamp(created_at_ms / 1000)
                         cet_dt = utc_dt + timedelta(hours=1)
-                        open_time_str = cet_dt.strftime('%H:%M:%S %d-%m')
+                        open_time_str = cet_dt.strftime('%d.%m.%Y %H:%M:%S')
                     else:
                         open_time_str = "Unknown"
                 except:
