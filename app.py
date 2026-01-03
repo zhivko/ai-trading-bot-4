@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import threading
 import time
 import sys
+import subprocess
 from chart_generator import generate_chart_data, get_chart_metadata, get_nn_model
 from data_updater import update_data_files
 import alarm_service
@@ -297,14 +298,60 @@ def background_update_task():
         time.sleep(900)  # 15 minutes = 900 seconds
 
 if __name__ == '__main__':
+
     # Start background update task
     update_thread = threading.Thread(target=background_update_task, daemon=True)
     update_thread.start()
 
+    # Launch Apex Integration Service
+    if True: # Main process launch
+        try:
+            # Construct path to trading_service.py
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            trading_service_path = os.path.join(base_dir, 'apex_integration', 'trading_service.py')
+            integration_dir = os.path.dirname(trading_service_path)
+            
+            if os.path.exists(trading_service_path):
+                print(f"🚀 Launching Apex Trading Service: {trading_service_path}")
+                
+                # Prepare environment with PYTHONPATH handling
+                env = os.environ.copy()
+                # Add project root to PYTHONPATH to ensure imports work
+                env["PYTHONPATH"] = base_dir + os.pathsep + env.get("PYTHONPATH", "")
+                
+                # Launch using the SAME python executable as app.py
+                # Use CREATE_NEW_CONSOLE (flag 16) to open in new window
+                subprocess.Popen(
+                    [sys.executable, "trading_service.py"], 
+                    cwd=integration_dir, 
+                    env=env,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+            else:
+                print(f"⚠️ Warning: trading_service.py not found at {trading_service_path}")
+                
+        except Exception as e:
+            print(f"❌ Failed to start Apex Integration Service: {e}")
+            raise e
+
     # Scan data directory on startup
     scan_data_directory()
 
-    # Run Flask app
-    # Set reloader type to 'watchdog' to avoid watching site-packages
-    os.environ['FLASK_RUN_RELOAD_TYPE'] = 'watchdog'
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=True)
+    # Run App with Uvicorn
+    import uvicorn
+    # Test logging before starting the server
+    print("🚀 Starting Apex Omni Trading Bot Web Monitor...")
+    print("📊 Web dashboard available at: http://localhost:5000")
+    
+    # We use interface="wsgi" because 'app' is a Flask application
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=5000,
+        reload=True,
+        interface="wsgi",
+        timeout_graceful_shutdown=1
+    )
+
+
+

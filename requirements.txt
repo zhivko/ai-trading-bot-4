@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cu130/
+
 # Requirements for multi_stochastic_quad_rotation.py and Flask Web Monitor
 
 # Web framework
@@ -5,12 +7,12 @@ Flask>=3.0.0
 flask-cors>=4.0.0
 
 # Core data processing
-pandas>=2.0.0
-numpy>=1.24.0
+pandas>=2.2.0
+numpy>=1.26.0
 
 # Cryptocurrency data fetching
 ccxt>=4.0.0
-pandas_ta>=0.3.14b
+pandas_ta
 python-binance>=1.0.19
 
 # Interactive plotting and visualization
@@ -32,4 +34,22 @@ scikit-learn>=1.3.0
 tqdm>=4.66.0
 
 kaleido==0.1.0post1
+
+
+
+# Telegram Bot
+python-telegram-bot>=20.0
+python-dotenv
+
+# Apex Integration Service
+apexomni
+fastapi
+uvicorn[standard]
+pydantic
+web3
+ecdsa
+mpmath
+sympy<1.13
+python-dateutil
+websocket-client
 
