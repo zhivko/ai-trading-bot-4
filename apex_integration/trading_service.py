@@ -70,8 +70,8 @@ if eth_private_key:
     # Ensure the private key has 0x prefix
     if not eth_private_key.startswith('0x'):
         eth_private_key = '0x' + eth_private_key
-        logger.info("Added 0x prefix to ETH private key")
-    logger.info(f"ETH private key with prefix: {eth_private_key[:12]}...")
+        logger.info("Added 0x prefix to ETH haha")
+    logger.info(f"ETH haha with prefix: {eth_private_key[:12]}...")
 
     # Test hex conversion
     try:
