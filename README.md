@@ -181,8 +181,8 @@ TELEGRAM_CHAT_ID=your_chat_id
 - `/start` - Check bot status and authorization.
 - `/balance` - Show current account balance, equity, and margin.
 - `/trades` - Display detailed list of active positions, including PNL and SL history.
-- `/buy [optional:alarm_id]` - Execute a Market BUY order on ApexPro.
-- `/sell [optional:alarm_id]` - Execute a Market SELL order on ApexPro.
+- `/buy [optional:alarm_id]` - Execute a Market BUY order. If ID is omitted, intelligently uses the **latest BUY alarm** found (with its SL/TP details). Defaults to BTC-USDT if no history exists.
+- `/sell [optional:alarm_id]` - Execute a Market SELL order. If ID is omitted, intelligently uses the **latest SELL alarm** found (with its SL/TP details). Defaults to BTC-USDT if no history exists.
 
 ### 3. Smart Monitoring
 The bot actively watches your open positions:

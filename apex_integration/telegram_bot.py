@@ -47,11 +47,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text="🚀 Apex Omni Trading Bot Interface Online\n\nCommands:\n/buy [alarm_id] [stop_loss] - Buy BTC-USDT\n/sell [alarm_id] [stop_loss] - Sell BTC-USDT\n\nIf alarm_id is omitted, one will be generated (e.g. buy_1700000000)."
     )
 
+def get_db_path():
+    """Get absolute path to alarms DB."""
+    # apex_integration/../data/alarms_db.json
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_dir, "data", "alarms_db.json")
+
 def get_alarm_info(alarm_id):
     """Lookup alarm details in the local JSON database."""
     import json
     try:
-        db_path = os.path.join("..", "data", "alarms_db.json")
+        db_path = get_db_path()
         if os.path.exists(db_path):
             with open(db_path, 'r') as f:
                 db = json.load(f)
@@ -59,6 +65,29 @@ def get_alarm_info(alarm_id):
     except Exception as e:
         logger.error(f"Error reading alarms_db.json: {e}")
     return None
+
+def get_latest_alarm(is_buy_target=True):
+    """Find the most recent alarm of a specific type (buy/sell)."""
+    import json
+    try:
+        db_path = get_db_path()
+        if os.path.exists(db_path):
+            with open(db_path, 'r') as f:
+                db = json.load(f)
+            
+            candidates = []
+            for key, val in db.items():
+                # Check match (is_buy might be boolean or string from older versions, assuming bool as per alarm_service)
+                if val.get('is_buy') == is_buy_target:
+                    candidates.append((key, val))
+            
+            if candidates:
+                # Sort by time string (ISO 8601 sorts alphabetically)
+                candidates.sort(key=lambda x: x[1].get('time', ''), reverse=True)
+                return candidates[0][0], candidates[0][1] # key, dict
+    except Exception as e:
+        logger.error(f"Error finding latest alarm: {e}")
+    return None, None
 
 async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update):
@@ -69,6 +98,19 @@ async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = DEFAULT_SYMBOL
     stop_loss = None
     take_profit = None
+
+    if not context.args:
+        # User accepted default/omitted ID -> Try to find LATEST BUY ALARM
+        latest_id, latest_info = get_latest_alarm(is_buy_target=True)
+        if latest_info:
+            alarm_id = latest_id
+            symbol = latest_info.get('symbol', DEFAULT_SYMBOL)
+            stop_loss = latest_info.get('stop_loss')
+            take_profit = latest_info.get('take_profit')
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"⚡ Using Last Buy Alarm: {alarm_id} ({symbol})")
+        else:
+            # Fallback to pure default
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"⚠️ No recent Buy Alarm found. Using default Market Buy for {symbol}.")
 
     if context.args:
         # Intelligently handle ID potentially containing spaces
@@ -128,6 +170,19 @@ async def sell_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = DEFAULT_SYMBOL
     stop_loss = None
     take_profit = None
+
+    if not context.args:
+        # User accepted default/omitted ID -> Try to find LATEST SELL ALARM
+        latest_id, latest_info = get_latest_alarm(is_buy_target=False)
+        if latest_info:
+            alarm_id = latest_id
+            symbol = latest_info.get('symbol', DEFAULT_SYMBOL)
+            stop_loss = latest_info.get('stop_loss')
+            take_profit = latest_info.get('take_profit')
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"⚡ Using Last Sell Alarm: {alarm_id} ({symbol})")
+        else:
+            # Fallback to pure default
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"⚠️ No recent Sell Alarm found. Using default Market Sell for {symbol}.")
 
     if context.args:
         # Intelligently handle ID potentially containing spaces
