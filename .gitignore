@@ -7,7 +7,7 @@
 /node_modules
 !signals.png
 !/assets/*.png
-/data/
+#/data/
 /screenshots/
 ai-trading-bot-4
 /.env
