@@ -80,7 +80,8 @@ After=network.target
 [Service]
 User=$USER_NAME
 WorkingDirectory=$APP_DIR
-ExecStart=$APP_DIR/start_server.sh
+Environment="PYTHONPATH=$APP_DIR"
+ExecStart=$APP_DIR/.venv/bin/uvicorn apex_integration.trading_service:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=10
 
