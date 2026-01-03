@@ -179,6 +179,8 @@ TELEGRAM_CHAT_ID=your_chat_id
 
 ### 2. Commands
 - `/start` - Check bot status and authorization.
+- `/balance` - Show current account balance, equity, and margin.
+- `/trades` - Display detailed list of active positions, including PNL and SL history.
 - `/buy [optional:alarm_id]` - Execute a Market BUY order on ApexPro.
 - `/sell [optional:alarm_id]` - Execute a Market SELL order on ApexPro.
 
