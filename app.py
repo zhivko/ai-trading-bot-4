@@ -359,9 +359,20 @@ if __name__ == '__main__':
                 )
             else:
                 print(f"⚠️ Warning: trading_service.py not found at {trading_service_path}")
+
+            # --- Launch Telegram Bot ---
+            telegram_bot_path = os.path.join(base_dir, 'apex_integration', 'telegram_bot.py')
+            if os.path.exists(telegram_bot_path):
+                print(f"🚀 Launching Telegram Bot: {telegram_bot_path}")
+                subprocess.Popen(
+                    [sys.executable, "telegram_bot.py"], 
+                    **kwargs
+                )
+            else:
+                print(f"⚠️ Warning: telegram_bot.py not found at {telegram_bot_path}")
                 
         except Exception as e:
-            print(f"❌ Failed to start Apex Integration Service: {e}")
+            print(f"❌ Failed to start Apex Services: {e}")
             raise e
 
     # Scan data directory on startup
