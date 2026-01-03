@@ -25,6 +25,8 @@ if [ -d "$APP_DIR" ]; then
     echo "Directory exists. Pulling latest changes..."
     cd "$APP_DIR"
     sudo git pull
+    # Fix ownership in case sudo git pull changed it
+    sudo chown -R "$USER_NAME:$USER_NAME" "$APP_DIR"
 else
     echo "Cloning repository..."
     if [ "$REPO_URL" == "YOUR_REPO_URL_HERE" ]; then
