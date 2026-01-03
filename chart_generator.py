@@ -389,6 +389,24 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
         nn_threshold: Neural network confidence threshold (0-100), default 30
     """
     import time
+    
+    # Generate the Figure object
+    fig, chart_df, debug_msg = get_chart_figure(filepath, symbol, timeframe, num_candles, start_date, end_date, nn_threshold, exit_strategy_id)
+    
+    # Convert to JSON
+    # FORCE VALID LISTS: Convert numpy arrays to python lists to ensure JSON serialization is clean
+    # (Plotly's to_json usually handles this but being explicit helps with NaN/Infinity issues)
+    
+    return fig.to_json()
+
+def get_chart_figure(filepath, symbol, timeframe, num_candles=100, start_date=None, end_date=None, nn_threshold=30, exit_strategy_id=3):
+    """
+    Generate the Plotly Figure object for the chart.
+    Returns: (fig, chart_df, debug_msg)
+    """
+
+    import time
+    
     t_start = time.time()
     # Read data
     df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
@@ -798,6 +816,8 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
         # as long as we understand the limitation (can't see future if zoomed in past).
         # Actually, chart_df is a Slice. Indicies are relative to slice.
         # But execute_trade expects DataFrame.
+    
+    # Return the Figure and Data (so caller can use them)
         
         t_strat_loop_start = time.time()
         for strat_id, (name, module, symbol_marker) in strategies.items():
@@ -985,19 +1005,16 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
     fig.update_yaxes(autorange=True, fixedrange=False, row=1, col=1)
     fig.update_yaxes(autorange=True, fixedrange=False, rangemode='tozero', row=2, col=1)
 
-    # Return as JSON
+    # Return as Figure
     t_plot = time.time() - t_start - t_load - t_alarms
-    json_result = fig.to_json()
-    t_json = time.time() - t_start - t_load - t_alarms - t_plot
     
-    print(f"DEBUG: generate_chart_data Breakdown:")
+    print(f"DEBUG: get_chart_figure Breakdown:")
     print(f"  - Load CSV:    {t_load:.4f}s")
     print(f"  - Alarms/NN:   {t_alarms:.4f}s")
     print(f"  - Plotly Fig:  {t_plot:.4f}s")
-    print(f"  - JSON Serial: {t_json:.4f}s")
     print(f"  - Total:       {time.time() - t_start:.4f}s")
     
-    return json_result
+    return fig, chart_df, debug_msg
 
 def get_chart_metadata(filepath):
     """Get metadata about the chart data"""
