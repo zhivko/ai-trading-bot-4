@@ -59,7 +59,7 @@ def scan_data_directory():
                 filepath = os.path.join(data_dir, filename)
                 try:
                     df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
-                    parsed['last_candle_time'] = df.index[-1].strftime('%Y-%m-%d %H:%M:%S')
+                    parsed['last_candle_time'] = get_cet_time(df.index[-1]).strftime('%Y-%m-%d %H:%M:%S')
                     parsed['total_candles'] = len(df)
                     parsed['date_range'] = f"{df.index[0].strftime('%Y-%m-%d')} to {df.index[-1].strftime('%Y-%m-%d')}"
                     files.append(parsed)
@@ -211,6 +211,8 @@ def get_strategy_preview(strategy_id, timestamp):
     try:
         # Load Data
         df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+        # Apply CET+1 Timezone shift to match frontend
+        df.index = df.index + pd.Timedelta(hours=1)
         
         # Find index for timestamp
         ts = pd.to_datetime(timestamp)

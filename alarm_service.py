@@ -54,7 +54,9 @@ def check_signals(filepath, symbol, timeframe, nn_threshold=30):
     try:
         # Load data (last 1000 candles)
         df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
-
+        # Apply CET+1 Timezone shift for alerts
+        df.index = df.index + pd.Timedelta(hours=1)
+        
         if df.empty:
             return []
             

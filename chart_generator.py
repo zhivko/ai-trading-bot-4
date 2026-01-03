@@ -410,6 +410,8 @@ def get_chart_figure(filepath, symbol, timeframe, num_candles=100, start_date=No
     t_start = time.time()
     # Read data
     df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+    # Apply CET+1 Timezone shift for display
+    df.index = df.index + pd.Timedelta(hours=1)
     t_load = time.time() - t_start
 
     # OPTIMIZATION: Slice DataFrame for processing
@@ -453,6 +455,8 @@ def get_chart_figure(filepath, symbol, timeframe, num_candles=100, start_date=No
             if os.path.exists(filepath_1h):
                 # Load 1h data
                 df_1h = pd.read_csv(filepath_1h, index_col='timestamp', parse_dates=True)
+                # Apply CET+1 shift to 1h overlay as well
+                df_1h.index = df_1h.index + pd.Timedelta(hours=1)
                 
                 # Optimization: Slice 1h data to similar range as 15m view
                 # INCREASED BUFFER to 500 to ensure Stochs have plenty of warm-up data
@@ -1019,6 +1023,8 @@ def get_chart_figure(filepath, symbol, timeframe, num_candles=100, start_date=No
 def get_chart_metadata(filepath):
     """Get metadata about the chart data"""
     df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+    # Apply CET+1 Timezone shift for display
+    df.index = df.index + pd.Timedelta(hours=1)
 
     return {
         'total_candles': len(df),
