@@ -50,7 +50,7 @@ pydantic
 web3
 ecdsa
 mpmath
-sympy==1.11.1
+sympy>=1.13.3
 python-dateutil
 websocket-client
 
