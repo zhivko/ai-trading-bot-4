@@ -952,7 +952,7 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
          autosize=True,
          showlegend=False,
          xaxis_rangeslider_visible=False,
-         hovermode='x',
+         hovermode='x unified',
          paper_bgcolor='#0f0c29',
          plot_bgcolor='#1a1a2e',
          font=dict(color='white', size=12),
@@ -961,9 +961,27 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
          uirevision='no_reset',
          hoverdistance=20, # Only activate when close (default)
          spikedistance=20,
+         shapes=[{
+            'type': 'line',
+            'xref': 'x',
+            'yref': 'paper',
+            'x0': 0, 'x1': 0, 'y0': 0, 'y1': 1,
+            'line': {'color': 'rgba(255, 255, 255, 0.5)', 'width': 1, 'dash': 'solid'},
+            'visible': False,
+            'name': 'crosshair_v'
+         }]
     )
 
-    # 1. Standard Axis Formatting (Dates)
+    # Force 100% width for all standard subplots (VP removed from main chart)
+    layout_update = {}
+    for i in range(1, 7):
+        suffix = "" if i == 1 else str(i)
+        key = f"xaxis{suffix}"
+        # Links all axes to the first one for unified hover synchronization
+        layout_update[key] = dict(domain=[0, 1.0], type='date', matches='x' if i > 1 else None)
+    fig.update_layout(layout_update)
+
+    # 1. Standard Axis Formatting (Dates) - MOVED AFTER LAYOUT UPDATE
     fig.update_xaxes(
         showgrid=True,
         gridcolor='#333333',
@@ -981,14 +999,6 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
     
     # Enable tick labels on the bottom row (row 6)
     fig.update_xaxes(showticklabels=True, row=6, col=1)
-
-    # Force 100% width for all standard subplots (VP removed from main chart)
-    layout_update = {}
-    for i in range(1, 7):
-        suffix = "" if i == 1 else str(i)
-        key = f"xaxis{suffix}"
-        layout_update[key] = dict(domain=[0, 1.0], type='date')
-    fig.update_layout(layout_update)
 
     # 2. Add POC/HVN/LVN Markers (Do this LAST to avoid axis pollution during layout updates)
     max_vp_vol = 100

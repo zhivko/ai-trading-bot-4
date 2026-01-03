@@ -321,9 +321,27 @@
             border: 1px solid rgba(255, 255, 255, 0.05);
         }
 
+        #chart-container {
+            position: relative;
+            flex-grow: 1;
+            height: 100%;
+            overflow: hidden;
+        }
+
         #chart {
             width: 100%;
             height: 100%;
+        }
+
+        #v-line-overlay {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background-color: rgba(255, 255, 255, 0.4);
+            pointer-events: none;
+            display: none;
+            z-index: 100;
         }
 
         .close-panel-btn {
@@ -465,7 +483,10 @@
             </header>
 
             <div class="chart-container">
-                <div id="chart"></div>
+                <div id="chart-container">
+                    <div id="chart"></div>
+                    <div id="v-line-overlay"></div>
+                </div>
             </div>
         </div>
 
@@ -915,6 +936,24 @@
 
                         loadStrategyPreview(timestamp);
                     }
+                });
+
+                // --- SHARED VERTICAL CROSSHAIR SYNC ---
+                chartDiv.on('plotly_hover', function (data) {
+                    if (data.points && data.points.length > 0) {
+                        const x = data.points[0].x;
+                        Plotly.relayout(chartDiv, {
+                            'shapes[0].x0': x,
+                            'shapes[0].x1': x,
+                            'shapes[0].visible': true
+                        });
+                    }
+                });
+
+                chartDiv.on('plotly_unhover', function (data) {
+                    Plotly.relayout(chartDiv, {
+                        'shapes[0].visible': false
+                    });
                 });
 
 
