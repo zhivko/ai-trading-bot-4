@@ -56,58 +56,64 @@ def format_decimal_for_apex(decimal_value: decimal.Decimal) -> str:
 # Load environment variables
 load_dotenv(override=True)
 
-# Initialize ApexPro clients (same as fetch_account_value.py)
-key = os.getenv('APEXPRO_API_KEY')
-secret = os.getenv('APEXPRO_API_SECRET')
-passphrase = os.getenv('APEXPRO_API_PASSPHRASE')
+# Initialize ApexPro clients (Global placeholders)
+client = None
+client_public = None
 
-# Derive ZK keys
-logger.info("ZK credentials not found, attempting to derive from ETH private key...")
-eth_private_key = os.getenv('APEXPRO_ETH_PRIVATE_KEY')
-logger.info(f"ETH private key loaded: {'YES' if eth_private_key else 'NO'}")
-if eth_private_key:
-    logger.info(f"Raw ETH private key: {eth_private_key[:10]}... (length: {len(eth_private_key)})")
-    # Ensure the private key has 0x prefix
-    if not eth_private_key.startswith('0x'):
-        eth_private_key = '0x' + eth_private_key
-        logger.info("Added 0x prefix to ETH haha")
-    logger.info(f"ETH haha with prefix: {eth_private_key[:12]}...")
+def initialize_apex_clients():
+    global client, client_public
+    # Initialize ApexPro clients (same as fetch_account_value.py)
+    key = os.getenv('APEXPRO_API_KEY')
+    secret = os.getenv('APEXPRO_API_SECRET')
+    passphrase = os.getenv('APEXPRO_API_PASSPHRASE')
 
-    # Test hex conversion
-    try:
-        test_hex = bytes.fromhex(eth_private_key[2:])  # Remove 0x prefix for test
-        logger.info(f"Hex conversion successful, length: {len(test_hex)}")
-    except Exception as hex_error:
-        logger.error(f"Hex conversion failed: {hex_error}")
-        raise Exception(f"Invalid ETH private key format: {hex_error}")
+    # Derive ZK keys
+    logger.info("ZK credentials not found, attempting to derive from ETH private key...")
+    eth_private_key = os.getenv('APEXPRO_ETH_PRIVATE_KEY')
+    logger.info(f"ETH private key loaded: {'YES' if eth_private_key else 'NO'}")
+    if eth_private_key:
+        logger.info(f"Raw ETH private key: {eth_private_key[:10]}... (length: {len(eth_private_key)})")
+        # Ensure the private key has 0x prefix
+        if not eth_private_key.startswith('0x'):
+            eth_private_key = '0x' + eth_private_key
+            logger.info("Added 0x prefix to ETH haha")
+        logger.info(f"ETH haha with prefix: {eth_private_key[:12]}...")
 
-    # Use HttpPrivate_v3 for derivation (same as demo_register_v3.py)
-    temp_client = HttpPrivate_v3(APEX_OMNI_HTTP_MAIN, network_id=NETWORKID_MAIN, eth_private_key=eth_private_key)
-    temp_client.configs_v3()  # Initialize configuration
+        # Test hex conversion
+        try:
+            test_hex = bytes.fromhex(eth_private_key[2:])  # Remove 0x prefix for test
+            logger.info(f"Hex conversion successful, length: {len(test_hex)}")
+        except Exception as hex_error:
+            logger.error(f"Hex conversion failed: {hex_error}")
+            raise Exception(f"Invalid ETH private key format: {hex_error}")
 
-    # Derive ZK keys using default_address (same as demo)
-    derived_keys = temp_client.derive_zk_key(temp_client.default_address)
-    logger.info(f"Derived keys type: {type(derived_keys)}")
-    logger.info(f"Derived keys keys: {list(derived_keys.keys()) if isinstance(derived_keys, dict) else 'Not dict'}")
+        # Use HttpPrivate_v3 for derivation (same as demo_register_v3.py)
+        temp_client = HttpPrivate_v3(APEX_OMNI_HTTP_MAIN, network_id=NETWORKID_MAIN, eth_private_key=eth_private_key)
+        temp_client.configs_v3()  # Initialize configuration
 
-    if derived_keys and 'seeds' in derived_keys and 'l2Key' in derived_keys:
-        zk_seeds = derived_keys['seeds']
-        l2_key = derived_keys['l2Key']
-        logger.info(f"ZK seeds length: {len(zk_seeds)}")
-        logger.info(f"L2 key length: {len(l2_key)}")
-        logger.info("ZK credentials derived successfully from ETH private key")
+        # Derive ZK keys using default_address (same as demo)
+        derived_keys = temp_client.derive_zk_key(temp_client.default_address)
+        logger.info(f"Derived keys type: {type(derived_keys)}")
+        logger.info(f"Derived keys keys: {list(derived_keys.keys()) if isinstance(derived_keys, dict) else 'Not dict'}")
+
+        if derived_keys and 'seeds' in derived_keys and 'l2Key' in derived_keys:
+            zk_seeds = derived_keys['seeds']
+            l2_key = derived_keys['l2Key']
+            logger.info(f"ZK seeds length: {len(zk_seeds)}")
+            logger.info(f"L2 key length: {len(l2_key)}")
+            logger.info("ZK credentials derived successfully from ETH private key")
+        else:
+            raise Exception("ZK key derivation returned invalid format")
     else:
-        raise Exception("ZK key derivation returned invalid format")
-else:
-    logger.error("No ETH private key found in environment variables")
-    raise Exception("ETH private key required for ZK credential derivation")
+        logger.error("No ETH private key found in environment variables")
+        raise Exception("ETH private key required for ZK credential derivation")
 
-client = HttpPrivateSign(APEX_OMNI_HTTP_MAIN, network_id=NETWORKID_OMNI_MAIN_ARB,
-                         zk_seeds=zk_seeds, zk_l2Key=l2_key,
-                         api_key_credentials={'key': key, 'secret': secret, 'passphrase': passphrase})
-client.configs_v3()  # Initialize config data needed for order placement
+    client = HttpPrivateSign(APEX_OMNI_HTTP_MAIN, network_id=NETWORKID_OMNI_MAIN_ARB,
+                             zk_seeds=zk_seeds, zk_l2Key=l2_key,
+                             api_key_credentials={'key': key, 'secret': secret, 'passphrase': passphrase})
+    client.configs_v3()  # Initialize config data needed for order placement
 
-client_public = HttpPublic(APEX_OMNI_HTTP_MAIN)
+    client_public = HttpPublic(APEX_OMNI_HTTP_MAIN)
 
 # FastAPI app setup
 app = FastAPI(
@@ -1597,6 +1603,7 @@ async def monitor_trailing_stops_loop():
 @app.on_event("startup")
 async def startup_event():
     """Start background tasks on API startup."""
+    initialize_apex_clients()
     asyncio.create_task(monitor_trailing_stops_loop())
 
 if __name__ == "__main__":
