@@ -15,7 +15,7 @@ echo -e "${GREEN}Starting Setup...${NC}"
 # 1. System Dependencies
 echo -e "${GREEN}[1/5] Installing System Dependencies...${NC}"
 sudo apt update
-sudo apt install -y python3-pip python3-venv git
+sudo apt install -y python3-pip python3-venv git dos2unix
 
 # 2. Clone/Update Repository
 echo -e "${GREEN}[2/5] Setting up Repository...${NC}"
@@ -63,6 +63,8 @@ if [ ! -f ".env" ]; then
 fi
 
 # Make start script executable
+# Convert scripts to Unix line endings
+dos2unix start_server.sh
 chmod +x start_server.sh
 
 # 5. Systemd Service
