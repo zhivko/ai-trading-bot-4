@@ -240,6 +240,28 @@
             </div>
         </header>
 
+        {% if alarms %}
+        <div class="alarms-section">
+            <h2 style="margin-bottom: 20px; color: #ff6b6b; font-size: 1.5em;">🔔 Active Signals</h2>
+            <div class="data-grid" style="margin-top: 10px; margin-bottom: 40px;">
+                {% for alarm in alarms %}
+                <div class="data-card" style="border-color: rgba(255, 107, 107, 0.3);">
+                    <div class="card-header">
+                        <div class="symbol">{{ alarm.symbol }}</div>
+                        <div class="timeframe" style="background: linear-gradient(45deg, #ff6b6b, #ee0979);">{{
+                            alarm.timeframe }}</div>
+                    </div>
+                    <div class="card-info">
+                        <div class="info-row" style="white-space: pre-wrap; line-height: 1.5;">{{ alarm.message }}</div>
+                    </div>
+                    <button class="view-chart-btn"
+                        onclick="viewChart('{{ alarm.symbol }}', '{{ alarm.timeframe }}')">View Chart →</button>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         <div class="loading" id="loading">
             <div class="spinner"></div>
             <div>Updating data...</div>

@@ -179,13 +179,19 @@ def send_telegram_alert(alarm_data, filepath):
 def check_and_notify_all():
     """
     Scans all data files and checks for alarms.
+    Returns a tuple: (list_of_alarms, timestamp_of_check)
     """
     data_dir = os.path.join(os.path.dirname(__file__), 'data')
-    if not os.path.exists(data_dir):
-        return
-
-    print(f"[{datetime.now()}] Checking for alarms...")
+    # Capture the timestamp of when we performed the check
+    check_time = datetime.now()
     
+    if not os.path.exists(data_dir):
+        return [], check_time
+
+    print(f"[{check_time}] Checking for alarms...")
+    
+    all_alarms = []
+
     for filename in os.listdir(data_dir):
         if filename.endswith("_data.csv"):
             parts = filename.split('_')
@@ -202,3 +208,6 @@ def check_and_notify_all():
                 
                 for alarm in alarms:
                     send_telegram_alert(alarm, filepath)
+                    all_alarms.append(alarm)
+    
+    return all_alarms, check_time

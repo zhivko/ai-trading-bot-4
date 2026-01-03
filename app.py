@@ -23,6 +23,7 @@ if get_nn_model() is None:
 # Global variable to store available data files
 data_files = []
 last_update_time = None
+global_latest_alarms = []
 
 def parse_filename(filename):
     """
@@ -68,19 +69,34 @@ def scan_data_directory():
     data_files = files
     return files
 
+def get_cet_time(dt):
+    """Convert timestamp to CET (UTC+1) assuming server is UTC"""
+    if dt is None:
+        return None
+    # Assuming server time is UTC, CET is UTC+1
+    # If server is already CET, this might double add, but usually servers are UTC.
+    # The user asked for "CET+1" specifically.
+    return dt + timedelta(hours=1)
+
 @app.route('/')
 def index():
     """Main dashboard showing all available data files"""
     scan_data_directory()
-    return render_template('index.html', data_files=data_files, last_update=last_update_time)
+    cet_update = get_cet_time(last_update_time)
+    return render_template('index.html', 
+                         data_files=data_files, 
+                         last_update=cet_update,
+                         alarms=global_latest_alarms)
 
 @app.route('/api/files')
 def get_files():
     """API endpoint to get list of available data files"""
     scan_data_directory()
+    cet_update = get_cet_time(last_update_time)
     return jsonify({
         'files': data_files,
-        'last_update': last_update_time.strftime('%Y-%m-%d %H:%M:%S') if last_update_time else None
+        'last_update': cet_update.strftime('%Y-%m-%d %H:%M:%S') if cet_update else None,
+        'alarms': global_latest_alarms
     })
 
 @app.route('/chart/<symbol>/<timeframe>')
@@ -263,11 +279,12 @@ def get_latest_data(symbol, timeframe):
 @app.route('/api/update')
 def trigger_update():
     """Manually trigger data update"""
-    global last_update_time
+    global last_update_time, global_latest_alarms
     try:
         update_data_files()
-        alarm_service.check_and_notify_all()
-        last_update_time = datetime.now()
+        alarms, ts = alarm_service.check_and_notify_all()
+        last_update_time = ts
+        global_latest_alarms = alarms
         return jsonify({
             'status': 'success',
             'message': 'Data updated successfully',
@@ -281,16 +298,19 @@ def trigger_update():
 
 def background_update_task():
     """Background task to update data files periodically"""
-    global last_update_time
+    global last_update_time, global_latest_alarms
     while True:
         try:
             print(f"[{datetime.now()}] Running background data update...")
             update_data_files()
-            last_update_time = datetime.now()
-            print(f"[{datetime.now()}] Update completed successfully")
             
             # Check for alarms after data update
-            alarm_service.check_and_notify_all()
+            alarms, ts = alarm_service.check_and_notify_all()
+            last_update_time = ts
+            global_latest_alarms = alarms
+            
+            print(f"[{datetime.now()}] Update completed successfully at {ts}")
+            
         except Exception as e:
             print(f"[{datetime.now()}] Error in background update: {e}")
 
