@@ -178,139 +178,90 @@ async def sell_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(chat_id=update.effective_chat.id, text=message)
 
-
-# Global state for tracking active trades
-# Format: {symbol: {'alarm_id': str, 'highest_price': float, 'entry_price': float, 'stop_loss': float, 'side': str}}
-active_trades = {}
-
-async def monitor_positions(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Monitor active positions every 5 seconds.
-    - Detect new positions (Entry).
-    - Update trailing stops (Logic).
-    - Alert on changes.
-    """
-    global active_trades
-    
-    if not TELEGRAM_CHAT_ID:
+async def trades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show currently monitored trades and their trailing stop status from the service."""
+    if not await check_auth(update):
         return
 
     try:
-        # Fetch current positions from trading service
-        url = f"{TRADING_SERVICE_URL}/positions"
+        url = f"{TRADING_SERVICE_URL}/tracking-status"
         response = requests.get(url, timeout=5)
         
         if response.status_code != 200:
-            logger.error(f"Failed to fetch positions: {response.text}")
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Failed to fetch tracking: {response.status_code}")
             return
 
         data = response.json()
-        positions = data.get('positions', [])
+        tracking = data.get('tracking', {})
         
-        current_symbols = set()
+        if not tracking:
+             await context.bot.send_message(chat_id=update.effective_chat.id, text="No active trades are currently being tracked for trailing stops.")
+             return
 
-        for pos in positions:
-            symbol = pos.get('symbol')
-            size = float(pos.get('size', 0))
-            if size == 0:
-                continue
-                
-            current_symbols.add(symbol)
-            side = pos.get('side')
-            entry_price = float(pos.get('entryPrice', 0))
-            current_price = float(pos.get('current_price', 0)) # Assuming /positions returns this or we need to fetch ticker
-            
-            # If current_price missing in position object, fallback to entry (for initial) or fetch ticker if critical
-            if current_price == 0:
-                 current_price = entry_price # Temporary fallback
-
-            # 1. New Position Detection
-            if symbol not in active_trades:
-                # Try to guess alarm_id or use default
-                # In a real sync, we'd map orderID to alarmID, but here we assume latest
-                alarm_id = f"detected_{int(time.time())}"
-                
-                # Check if we have a manually tracked one from /buy matching this symbol?
-                # For now, create new tracking entry
-                initial_stop_loss = 0.0 # Unknown unless we knew the order
-                
-                active_trades[symbol] = {
-                    'alarm_id': alarm_id,
-                    'highest_price': current_price if side == 'LONG' else 0, # For SHORT, we track lowest
-                    'lowest_price': current_price if side == 'SHORT' else float('inf'),
-                    'entry_price': entry_price,
-                    'stop_loss': initial_stop_loss,
-                    'side': side,
-                    'last_update': time.time()
-                }
-                
-                msg = f"🔔 **Entry Detected**\n\nSymbol: {symbol}\nSide: {side}\nEntry Price: {entry_price}\nSize: {size}"
-                await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
-
-
-            # 2. Trailing Stop Management
-            trade = active_trades[symbol]
-            
-            # Update high/low for trailing
-            new_sl_value = None
+        msg = "📊 **Autonomous Trailing Monitor**\n\n"
+        for symbol, trade in tracking.items():
+            side = trade.get('side', 'UNKNOWN')
+            sl = trade.get('last_sl', 0)
             
             if side == 'LONG':
-                if current_price > trade['highest_price']:
-                    trade['highest_price'] = current_price
-                    # Logic: If price moves up by X%, move SL up?
-                    # Example: Trailing stop distance 2% (widened to avoid noise)
-                    trail_percent = 0.02
-                    new_sl = current_price * (1 - trail_percent)
-                    
-                    if new_sl > trade.get('stop_loss', 0):
-                        new_sl_value = new_sl
-                            
-            elif side == 'SHORT':
-                 if current_price < trade['lowest_price']:
-                    trade['lowest_price'] = current_price
-                    trail_percent = 0.02 
-                    new_sl = current_price * (1 + trail_percent)
-                    
-                    current_sl = trade.get('stop_loss', float('inf'))
-                    if new_sl < current_sl:
-                        new_sl_value = new_sl
+                best = trade.get('highest_price', 0)
+                best_label = "Highest"
+            else:
+                best = trade.get('lowest_price', 0)
+                best_label = "Lowest"
+                
+            msg += f"🔹 **{symbol}** ({side})\n"
+            msg += f"• {best_label}: {best:.2f}\n"
+            msg += f"• Active SL: {sl:.2f}\n\n"
 
-            # Apply Update if needed
-            if new_sl_value:
-                try:
-                    update_url = f"{TRADING_SERVICE_URL}/position/update-sl/{symbol}"
-                    resp = requests.post(update_url, params={'stop_loss': new_sl_value}, timeout=5)
-                    
-                    if resp.status_code == 200:
-                        old_sl = trade.get('stop_loss', 0)
-                        trade['stop_loss'] = new_sl_value
-                        
-                        # Notify
-                        await context.bot.send_message(
-                            chat_id=TELEGRAM_CHAT_ID, 
-                            text=f"🔄 **Trailing Stop Updated** ({symbol})\n\nNew SL: {new_sl_value:.2f}\nPrice: {current_price:.2f}"
-                        )
-                    else:
-                        logger.error(f"Failed to update SL for {symbol}: {resp.text}")
-                except Exception as e:
-                    logger.error(f"Exception updating SL: {e}")
-
-        # 3. Closed Position Detection
-        closed_symbols = []
-        for sym in active_trades:
-            if sym not in current_symbols:
-                # Position closed
-                closed_symbols.append(sym)
-                await context.bot.send_message(
-                    chat_id=TELEGRAM_CHAT_ID,
-                    text=f"🏁 **Position Closed**\n\nSymbol: {sym}"
-                )
-        
-        for sym in closed_symbols:
-            del active_trades[sym]
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
     except Exception as e:
-        logger.error(f"Error in monitor loop: {e}")
+        logger.error(f"Error calling tracking-status: {e}")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ System Error: {str(e)}")
+
+async def positions_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show current exchange positions and P&L."""
+    if not await check_auth(update):
+        return
+
+    try:
+        url = f"{TRADING_SERVICE_URL}/positions"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            positions = data.get('positions', [])
+            
+            if not positions:
+                await context.bot.send_message(chat_id=update.effective_chat.id, text="No open positions found on the exchange.")
+                return
+
+            msg = "📈 **Active Positions**\n\n"
+            for pos in positions:
+                symbol = pos.get('symbol')
+                side = pos.get('side')
+                size = pos.get('size')
+                entry = pos.get('entryPrice')
+                current = pos.get('current_price')
+                pnl_usd = pos.get('unrealized_pnl', 0)
+                pnl_pct = pos.get('pnl_percentage', 0)
+                
+                emoji = "🟢" if pnl_usd >= 0 else "🔴"
+                msg += f"{emoji} **{symbol}** ({side})\n"
+                msg += f"• Size: {size}\n"
+                msg += f"• Entry: {entry}\n"
+                msg += f"• Mark: {current}\n"
+                msg += f"• P&L: {pnl_pct:.2f}% (${pnl_usd:.2f})\n\n"
+                
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+        else:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Failed to fetch positions: {response.status_code}")
+            
+    except Exception as e:
+        logger.error(f"Error calling positions: {e}")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ System Error: {str(e)}")
+
 
 if __name__ == '__main__':
     if not TELEGRAM_BOT_TOKEN:
@@ -322,17 +273,16 @@ if __name__ == '__main__':
     start_handler = CommandHandler('start', start)
     buy_cmd_handler = CommandHandler('buy', buy_handler)
     sell_cmd_handler = CommandHandler('sell', sell_handler)
+    trades_cmd_handler = CommandHandler('trades', trades_handler)
+    positions_cmd_handler = CommandHandler('positions', positions_handler)
     
     application.add_handler(start_handler)
     application.add_handler(buy_cmd_handler)
     application.add_handler(sell_cmd_handler)
+    application.add_handler(trades_cmd_handler)
+    application.add_handler(positions_cmd_handler)
     
-    # Add JobQueue for monitoring
-    if application.job_queue:
-        application.job_queue.run_repeating(monitor_positions, interval=5, first=5)
-        logger.info("Monitoring scheduled every 5 seconds.")
-    else:
-        logger.warning("JobQueue not available. Monitoring disabled.")
+    # We NO LONGER need JobQueue here because the TRADING SERVICE handles monitoring autonomously.
     
     logger.info("Bot is starting polling...")
     application.run_polling()

@@ -1339,11 +1339,110 @@ async def update_stop_loss(symbol: str, stop_loss: float):
             "new_order_id": new_order.get('id')
         }
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating SL: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/tracking-status")
+async def get_tracking_status():
+    """Get the current state of autonomous trailing stop tracking."""
+    return {
+        "status": "success",
+        "tracking": active_trades_tracking
+    }
+
+# --- TRAILING STOP BACKGROUND MONITORING ---
+active_trades_tracking = {}
+
+async def monitor_trailing_stops_loop():
+    """Background task to monitor positions and update trailing stops autonomously."""
+    logger.info("Starting background trailing stop monitor...")
+    while True:
+        try:
+            # 1. Fetch current positions efficiently
+            account_data = calculate_account_value()
+            positions = account_data.get('positions', [])
+            
+            current_symbols = set()
+            for pos in positions:
+                symbol = pos.get('symbol')
+                size = float(pos.get('size', 0))
+                if size == 0: continue
+                
+                current_symbols.add(symbol)
+                side = pos.get('side')
+                entry_price = float(pos.get('entryPrice', 0))
+                mark_price = float(pos.get('markPrice', 0))
+                
+                # Fetch ticker for real-time calculation if markPrice is stale? 
+                # (get_current_price is already used in calculate_account_value)
+                current_price = mark_price if mark_price > 0 else float(get_current_price(symbol))
+                
+                # 2. Position Tracking Initializer
+                if symbol not in active_trades_tracking:
+                    active_trades_tracking[symbol] = {
+                        'highest_price': current_price if side == 'LONG' else 0,
+                        'lowest_price': current_price if side == 'SHORT' else float('inf'),
+                        'last_sl': 0.0, # Will be set on update
+                        'side': side
+                    }
+                    logger.info(f"Monitor: Started tracking {symbol} {side}")
+
+                # 3. Trailing Stop Logic
+                trade = active_trades_tracking[symbol]
+                new_sl_value = None
+                trail_trigger_pct = 0.02 # Trail if price moves 2% in favor
+
+                if side == 'LONG':
+                    if current_price > trade['highest_price']:
+                        trade['highest_price'] = current_price
+                        # Tighten SL to 2% below highest (only if better than current)
+                        potential_sl = current_price * 0.98
+                        if potential_sl > trade['last_sl']:
+                            new_sl_value = potential_sl
+                else: # SHORT
+                    if current_price < trade['lowest_price']:
+                        trade['lowest_price'] = current_price
+                        potential_sl = current_price * 1.02
+                        if trade['last_sl'] == 0 or potential_sl < trade['last_sl']:
+                            new_sl_value = potential_sl
+
+                # 4. Execute Update
+                if new_sl_value:
+                    try:
+                        logger.info(f"Trailing: Updating {symbol} {side} SL to {new_sl_value:.2f}")
+                        await update_stop_loss(symbol, new_sl_value)
+                        
+                        # Notify Telegram directly from service
+                        telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
+                        telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
+                        
+                        if telegram_token and telegram_chat_id:
+                            msg = f"🔄 **Trailing Stop Updated** ({symbol})\n\nNew SL: {new_sl_value:.2f}\nMark Price: {current_price:.2f}"
+                            try:
+                                requests.post(
+                                    f"https://api.telegram.org/bot{telegram_token}/sendMessage",
+                                    json={"chat_id": telegram_chat_id, "text": msg, "parse_mode": "Markdown"},
+                                    timeout=5
+                                )
+                            except: pass # Don't crash loop on notification failure
+
+                        trade['last_sl'] = new_sl_value
+                        logger.info(f"Trailing: Successfully updated {symbol} SL to {new_sl_value:.2f}")
+                    except Exception as sl_err:
+                        logger.error(f"Trailing: Update failed for {symbol}: {sl_err}")
+
+            # 5. Cleanup closed positions
+            for sym in list(active_trades_tracking.keys()):
+                if sym not in current_symbols:
+                    logger.info(f"Monitor: Position {sym} closed, removing from tracker.")
+                    del active_trades_tracking[sym]
+
+        except Exception as e:
+            logger.error(f"Error in trailing stop monitor loop: {e}")
+            
+        await asyncio.sleep(10) # Run every 10 seconds
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background tasks on API startup."""
+    asyncio.create_task(monitor_trailing_stops_loop())
 
 if __name__ == "__main__":
     import uvicorn
