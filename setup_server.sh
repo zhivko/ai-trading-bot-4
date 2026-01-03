@@ -60,7 +60,12 @@ echo -e "${GREEN}[4/5] Checking Configuration...${NC}"
 if [ ! -f ".env" ]; then
     echo "Creating .env file from template..."
     # You might want to provide a .env.example file in your repo
-    touch .env
+    echo "Creating .env file from template..."
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+    else
+        touch .env
+    fi
     echo "Please edit $APP_DIR/.env with your secrets."
 fi
 
