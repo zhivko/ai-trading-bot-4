@@ -321,11 +321,19 @@ if __name__ == '__main__':
                 
                 # Launch using the SAME python executable as app.py
                 # Use CREATE_NEW_CONSOLE (flag 16) to open in new window
+                # Prepare subprocess arguments
+                kwargs = {
+                    "cwd": integration_dir,
+                    "env": env
+                }
+                
+                # Check for Windows-specific flags
+                if sys.platform == 'win32':
+                    kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+                
                 subprocess.Popen(
                     [sys.executable, "trading_service.py"], 
-                    cwd=integration_dir, 
-                    env=env,
-                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                    **kwargs
                 )
             else:
                 print(f"⚠️ Warning: trading_service.py not found at {trading_service_path}")

@@ -7,5 +7,5 @@ cd "$(dirname "$0")"
 # We add the current directory to PYTHONPATH to ensure imports work correctly
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 
-echo "Starting Apex Trading Service on port 8000..."
-./.venv/bin/uvicorn apex_integration.trading_service:app --host 0.0.0.0 --port 8000
+echo "Starting Web Monitor (app.py) which will launch Trading Service..."
+./.venv/bin/python app.py
