@@ -1304,15 +1304,26 @@ async def update_stop_loss(symbol: str, stop_loss: float):
 
         # 3. Place New SL Order (Stop Market)
         
-        # Get symbol config for tick size / step size
-        symbol_data = get_symbol_config(client.configs().get("data", {}).get("perpetualContract", []), symbol)
+        # 3. Place New SL Order (Stop Market)
         
+        # Get symbol config for tick size / step size
+        configs_data = client.configs_v3().get("data", {})
+        all_configs = configs_data.get("perpetualContract", []) + configs_data.get("contract", [])
+        symbol_data = get_symbol_config(all_configs, symbol)
+        
+        tick_size = '0.1' # Default fallback for BTC-like assets
         if not symbol_data:
-             raise HTTPException(status_code=400, detail=f"Symbol config not found for {symbol}")
+             logger.warning(f"Symbol config not found for {symbol}, using default tick size {tick_size}")
+             # Try public client fallback if available in future, or safe defaults
+             if 'ETH' in symbol: tick_size = '0.05'
+             elif 'SOL' in symbol: tick_size = '0.01'
+        else:
+             tick_size = symbol_data.get('tickSize', tick_size)
 
         # Format price
+        # Format price
         stop_loss_decimal = decimal.Decimal(str(stop_loss))
-        rounded_sl = round_size(str(stop_loss_decimal), symbol_data.get('tickSize'))
+        rounded_sl = round_size(str(stop_loss_decimal), tick_size)
         formatted_sl = format_decimal_for_apex(rounded_sl)
         
         # Create order params
@@ -1403,6 +1414,10 @@ async def monitor_trailing_stops_loop():
                 
                 current_symbols.add(symbol)
                 side = pos.get('side')
+                
+                # Filter out empty positions if any (sanity check, though size>0 check handles it)
+                if size <= 0: continue
+                
                 entry_price = float(pos.get('entryPrice', 0))
                 mark_price = float(pos.get('markPrice', 0))
                 created_at_ms = int(pos.get('createdAt', 0)) # Epoch ms
