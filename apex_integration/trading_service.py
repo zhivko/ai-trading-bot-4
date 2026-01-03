@@ -21,6 +21,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Compatibility Shim for SymPy 1.12+ which moved igcdex
+try:
+    import sympy.core.numbers
+except ImportError:
+    pass
+
+try:
+    from sympy.core.numbers import igcdex
+except ImportError:
+    try:
+        from sympy.core.intfunc import igcdex
+        import sympy.core.numbers
+        sympy.core.numbers.igcdex = igcdex
+        logger.info("Monkey-patched sympy.core.numbers.igcdex (compatibility mode)")
+    except ImportError:
+        logger.warning("Could not monkey-patch igcdex - apexomni might fail if it relies on it.")
+
 # Import ApexPro components
 from apexomni.constants import APEX_OMNI_HTTP_MAIN, NETWORKID_OMNI_MAIN_ARB, NETWORKID_MAIN
 from apexomni.http_private_sign import HttpPrivateSign
