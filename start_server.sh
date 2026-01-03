@@ -8,4 +8,4 @@ cd "$(dirname "$0")"
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 echo "Starting Web Monitor (app.py) which will launch Trading Service..."
-./.venv/bin/python app.py
+./.venv/bin/python -u app.py
