@@ -1384,38 +1384,36 @@ async def monitor_trailing_stops_loop():
                 
                 # 2. Position Tracking Initializer
                 if symbol not in active_trades_tracking:
-                    # Try to fetch existing SL from open orders to initialize correctly
-                    current_sl = 0.0
+                    active_trades_tracking[symbol] = {
+                        'highest_price': current_price if side == 'LONG' else 0,
+                        'lowest_price': current_price if side == 'SHORT' else float('inf'),
+                        'last_sl': 0.0, 
+                        'side': side
+                    }
+                    logger.info(f"Monitor: Started tracking {symbol} {side}")
+
+                # 3. Trailing Stop Logic
+                trade = active_trades_tracking[symbol]
+                
+                # Self-Healing: If SL is 0, try to fetch it from exchange
+                if trade['last_sl'] == 0:
                     try:
-                        # We only fetch this ONCE when position is first detected
                         open_orders_resp = client.open_orders_v3()
                         orders_list = open_orders_resp.get('data', [])
-                        
-                        # SL is on the opposite side of the position
                         sl_side = 'SELL' if side == 'LONG' else 'BUY'
                         
                         for order in orders_list:
                              if order.get('symbol') == symbol and order.get('side') == sl_side:
-                                 # Check for stop orders (STOP_MARKET, or having a trigger price)
                                  order_type = order.get('type', '')
                                  trigger_price = float(order.get('triggerPrice') or 0)
-                                 
-                                 if 'STOP' in order_type or trigger_price > 0:
-                                     current_sl = trigger_price
+                                 # Apex Pro often uses triggerPrice for stop orders
+                                 if ('STOP' in order_type or trigger_price > 0) and trigger_price > 0:
+                                     trade['last_sl'] = trigger_price
+                                     logger.info(f"Monitor: Auto-detected existing SL for {symbol}: {trigger_price}")
                                      break
                     except Exception as e:
-                        logger.error(f"Failed to fetch initial SL for {symbol}: {e}")
+                        logger.debug(f"Failed to probe SL: {e}")
 
-                    active_trades_tracking[symbol] = {
-                        'highest_price': current_price if side == 'LONG' else 0,
-                        'lowest_price': current_price if side == 'SHORT' else float('inf'),
-                        'last_sl': current_sl, 
-                        'side': side
-                    }
-                    logger.info(f"Monitor: Started tracking {symbol} {side} with Initial SL: {current_sl}")
-
-                # 3. Trailing Stop Logic
-                trade = active_trades_tracking[symbol]
                 new_sl_value = None
                 trail_trigger_pct = 0.02 # Trail if price moves 2% in favor
 
