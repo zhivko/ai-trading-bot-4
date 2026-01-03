@@ -1340,6 +1340,11 @@ async def update_stop_loss(symbol: str, stop_loss: float):
             "cancelled_orders": cancelled_count,
             "new_order_id": new_order.get('id')
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating SL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/tracking-status")
 async def get_tracking_status():
