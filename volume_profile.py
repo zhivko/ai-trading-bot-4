@@ -70,7 +70,8 @@ def get_precise_volume_histogram(df: pd.DataFrame, start_idx: int, end_idx: int,
 
 def calculate_volume_profile(df: pd.DataFrame, start_idx: Optional[int] = None, 
                             end_idx: Optional[int] = None, num_bins: int = 80, 
-                            verbose: bool = False, precise: bool = False) -> Dict:
+                            verbose: bool = False, precise: bool = False,
+                            minimal: bool = False) -> Dict:
     """
     Calculate volume profile for a given price range
     
@@ -126,17 +127,23 @@ def calculate_volume_profile(df: pd.DataFrame, start_idx: Optional[int] = None,
         poc_volume = volume_profile.iloc[poc_idx]
         
         # Calculate Value Area (70% of total volume)
-        vah, val = calculate_value_area(volume_profile, bin_centers, value_area_pct=70)
-        
-        # Find HVNs, LVNs, and CLUSTERS (Peaks)
-        hvn_prices = find_hvns(volume_profile, bin_centers, threshold_percentile=75)
-        lvn_prices = find_lvns(volume_profile, bin_centers, threshold_percentile=25)
-        cluster_prices = find_volume_clusters(volume_profile, bin_centers)
+        if not minimal:
+            vah, val = calculate_value_area(volume_profile, bin_centers, value_area_pct=70)
+            
+            # Find HVNs, LVNs, and CLUSTERS (Peaks)
+            hvn_prices = find_hvns(volume_profile, bin_centers, threshold_percentile=75)
+            lvn_prices = find_lvns(volume_profile, bin_centers, threshold_percentile=25)
+            cluster_prices = find_volume_clusters(volume_profile, bin_centers)
+        else:
+            vah, val = 0.0, 0.0
+            hvn_prices, lvn_prices, cluster_prices = [], [], []
         
         # Generate smoothed profile for visualization (fast method)
-        # GMM fitting only happens on marker click, not here
-        from scipy.ndimage import gaussian_filter1d
-        profile_smooth = gaussian_filter1d(volume_profile.values.astype(float), sigma=2)
+        if not minimal:
+            from scipy.ndimage import gaussian_filter1d
+            profile_smooth = gaussian_filter1d(volume_profile.values.astype(float), sigma=2)
+        else:
+            profile_smooth = None
         
         return {
             'profile': volume_profile,

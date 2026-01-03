@@ -16,27 +16,19 @@ def calculate_atr(df, period=14):
     atr = tr.rolling(window=period).mean()
     return atr
 
-def execute_trade(df, entry_idx, current_balance, position_size_pct=0.05, precise: bool = False):
+def execute_trade(df, entry_idx, current_balance, position_size_pct=0.5, precise: bool = False, is_sell: bool = False):
     """
-    Execute a single trade using Strategy 1: POC Target
-    
-    Args:
-        df: DataFrame with OHLCV data
-        entry_idx: Index of the entry candle
-        current_balance: Current account balance
-        position_size_pct: Size of position relative to balance
-        
-    Returns:
-        dict with trade results
+    Execute a single trade using Strategy 1: Hybrid POC PPT + Trail
     """
     entry_price = df['close'].iloc[entry_idx]
     entry_time = df.index[entry_idx]
     
     # Calculate position size
-    position_usd = current_balance * position_size_pct
-    btc_amount = position_usd / entry_price
+    total_position_usd = current_balance * position_size_pct
+    total_btc_amount = total_position_usd / entry_price
+    remaining_btc = total_btc_amount
     
-    # Dynamic ATR Stop Loss
+    # Dynamic ATR Initial Stop Loss
     start_atr = max(0, entry_idx - 20)
     atr_window = df.iloc[start_atr:entry_idx+1].copy()
     atr_series = calculate_atr(atr_window, period=14)
@@ -47,96 +39,121 @@ def execute_trade(df, entry_idx, current_balance, position_size_pct=0.05, precis
         
     atr_multiplier = 4.5
     stop_distance = current_atr * atr_multiplier
-    stop_price = entry_price - stop_distance
-    stop_loss_pct = stop_distance / entry_price
-    max_hold_candles = 24 * 4 * 7  # 7 days (15m candles)
     
-    # Calculate Volume Profile for context    # Calculate volume profile
+    if is_sell:
+        current_stop = entry_price + stop_distance
+    else:
+        current_stop = entry_price - stop_distance
+        
+    max_hold_candles = 24 * 4 * 7  # 7 days
+    
+    # Calculate Volume Profile for targets
     vp = calculate_volume_profile(df, start_idx=max(0, entry_idx-200), end_idx=entry_idx, precise=precise)
     if vp is None:
-        return {
-            'entry_time': entry_time,
-            'exit_time': entry_time,
-            'pnl': 0,
-            'pnl_pct': 0,
-            'balance_after': current_balance,
-            'hold_hours': 0,
-            'reason': 'VP_ERROR'
-        }
+        return {'entry_time': entry_time, 'exit_time': entry_time, 'pnl': 0, 'pnl_pct': 0, 'balance_after': current_balance, 'hold_hours': 0, 'reason': 'VP_ERROR'}
         
-    # Determine Profit Target (POC or VAH)
-    target_price = None
-    target_type = "NONE"
-    
-    # If POC is significantly above entry (> 1%), use it
-    if vp['poc_price'] > entry_price * 1.01:
-        target_price = vp['poc_price']
-        target_type = "POC"
-    # Else check VAH
-    elif vp['vah'] > entry_price * 1.01:
-        target_price = vp['vah']
-        target_type = "VAH"
+    # Determine Partial Profit Taking (PPT) Level
+    ppt_price = None
+    if is_sell:
+        if vp['poc_price'] < entry_price * 0.99: ppt_price = vp['poc_price']
+        elif vp['val'] < entry_price * 0.99: ppt_price = vp['val']
+        else: ppt_price = entry_price * 0.96
     else:
-        # Fallback: Use a standard R:R target (e.g., 5%) if no VP levels nearby
-        target_price = entry_price * 1.05
-        target_type = "FALLBACK_5PCT"
+        if vp['poc_price'] > entry_price * 1.01: ppt_price = vp['poc_price']
+        elif vp['vah'] > entry_price * 1.01: ppt_price = vp['vah']
+        else: ppt_price = entry_price * 1.04
     
-    # Simulate trade
-    exit_price = entry_price # Default
-    exit_time = entry_time
+    # Simulation state
+    pnl_realized = 0
     exit_reason = "HOLD_LIMIT"
-    exit_idx = entry_idx
+    ppt_hit = False
+    vp_last_updated = -999
+    last_exit_time = entry_time
+    final_exit_price = entry_price
     
     # Loop through future candles
     search_end = min(len(df), entry_idx + max_hold_candles)
+    current_close = entry_price
     
     for i in range(entry_idx + 1, search_end):
         current_low = df['low'].iloc[i]
         current_high = df['high'].iloc[i]
         current_close = df['close'].iloc[i]
         current_time = df.index[i]
+        last_exit_time = current_time
+        final_exit_price = current_close
         
-        # Check Stop Loss
-        if current_low <= stop_price:
-            exit_price = stop_price
-            exit_time = current_time
-            exit_reason = "STOP_LOSS"
-            exit_idx = i
+        # 1. Check Stop Loss
+        if is_sell:
+            if current_high >= current_stop:
+                pnl_realized += remaining_btc * (entry_price - current_stop)
+                remaining_btc = 0
+                exit_reason = "STOP_LOSS" if not ppt_hit else "TRAIL_STOP"
+                final_exit_price = current_stop
+                break
+        else:
+            if current_low <= current_stop:
+                pnl_realized += remaining_btc * (current_stop - entry_price)
+                remaining_btc = 0
+                exit_reason = "STOP_LOSS" if not ppt_hit else "TRAIL_STOP"
+                final_exit_price = current_stop
+                break
+            
+        # 2. Check PPT (if not hit)
+        if not ppt_hit:
+            hit_ppt = False
+            if is_sell:
+                if current_low <= ppt_price: hit_ppt = True
+            else:
+                if current_high >= ppt_price: hit_ppt = True
+                
+            if hit_ppt:
+                exit_amount = total_btc_amount * 0.50
+                pnl_realized += exit_amount * (entry_price - ppt_price) if is_sell else exit_amount * (ppt_price - entry_price)
+                remaining_btc -= exit_amount
+                ppt_hit = True
+                # Move SL to Break Even
+                current_stop = entry_price
+                
+        # 3. Update Trailing Stop (if PPT hit)
+        if ppt_hit and (i - vp_last_updated >= 10):
+            vp_i = calculate_volume_profile(df, start_idx=max(0, i-200), end_idx=i, precise=precise)
+            if vp_i:
+                hvn_prices = vp_i['hvn_prices']
+                if is_sell:
+                    resistances = [p for p in hvn_prices if p > current_close * 1.01]
+                    if resistances:
+                        new_stop = min(resistances)
+                        if new_stop < current_stop: current_stop = new_stop
+                else:
+                    supports = [p for p in hvn_prices if p < current_close * 0.99]
+                    if supports:
+                        new_stop = max(supports)
+                        if new_stop > current_stop: current_stop = new_stop
+            vp_last_updated = i
+                
+        if remaining_btc < 1e-10:
+            exit_reason = "ALL_TARGETS"
             break
             
-        # Check Profit Target
-        if current_high >= target_price:
-            exit_price = target_price
-            exit_time = current_time
-            exit_reason = f"TARGET_{target_type}"
-            exit_idx = i
-            break
-            
-        # Update exit values for max hold limit
-        exit_price = current_close
-        exit_time = current_time
-        exit_idx = i
+    # Final cleanup
+    if remaining_btc > 0:
+        pnl_realized += remaining_btc * (entry_price - current_close) if is_sell else remaining_btc * (current_close - entry_price)
     
-    # Calculate PnL
-    exit_usd = btc_amount * exit_price
-    pnl = exit_usd - position_usd
-    pnl_pct = (exit_price / entry_price - 1) * 100
-    
-    # Hold duration in hours
-    hold_duration = (exit_time - entry_time).total_seconds() / 3600
+    pnl_pct = (pnl_realized / total_position_usd) * 100
+    avg_exit_price = (entry_price - (pnl_realized / total_btc_amount)) if is_sell else (entry_price + (pnl_realized / total_btc_amount))
     
     return {
         'entry_time': entry_time,
         'entry_price': entry_price,
-        'exit_time': exit_time,
-        'exit_price': exit_price,
-        'pnl': pnl,
+        'exit_time': last_exit_time,
+        'exit_price': avg_exit_price,
+        'pnl': pnl_realized,
         'pnl_pct': pnl_pct,
-        'balance_after': current_balance + pnl,
-        'hold_hours': hold_duration,
+        'balance_after': current_balance + pnl_realized,
+        'hold_hours': (last_exit_time - entry_time).total_seconds() / 3600,
         'reason': exit_reason,
-        'target_price': target_price,
-        'target_type': target_type
+        'is_sell': is_sell
     }
 
 if __name__ == "__main__":

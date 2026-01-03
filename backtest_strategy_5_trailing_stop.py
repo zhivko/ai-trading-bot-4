@@ -16,19 +16,10 @@ def calculate_atr(df, period=14):
     atr = tr.rolling(window=period).mean()
     return atr
 
-def execute_trade(df, entry_idx, current_balance, position_size_pct=1.0, precise: bool = False):
+def execute_trade(df, entry_idx, current_balance, position_size_pct=0.5, precise: bool = False, is_sell: bool = False):
     """
     Execute a single trade using Strategy 5: Dynamic Trailing Stop
-    Trails stop loss at HVNs below price
-    
-    Args:
-        df: DataFrame with OHLCV data
-        entry_idx: Index of the entry candle
-        current_balance: Current account balance
-        position_size_pct: Size of position relative to balance
-        
-    Returns:
-        dict with trade results
+    Supports Long and Short positions.
     """
     entry_price = df['close'].iloc[entry_idx]
     entry_time = df.index[entry_idx]
@@ -45,70 +36,81 @@ def execute_trade(df, entry_idx, current_balance, position_size_pct=1.0, precise
     
     if np.isnan(current_atr) or current_atr == 0:
         current_atr = entry_price * 0.01
-        
+
     atr_multiplier = 4.5
     stop_distance = current_atr * atr_multiplier
-    current_stop = entry_price - stop_distance
-    max_hold_candles = 24 * 4 * 7  # 7 days (15m candles)
+    
+    if is_sell:
+        current_stop = entry_price + stop_distance
+    else:
+        current_stop = entry_price - stop_distance
+        
+    max_hold_candles = 24 * 4 * 7  # 7 days
     
     # Simulation state
-    exit_price = entry_price # Default
+    exit_price = entry_price
     exit_time = entry_time
     exit_reason = "HOLD_LIMIT"
-    exit_idx = entry_idx
     vp_last_updated = -999
-    hvn_prices = []
     
     # Loop through future candles
     search_end = min(len(df), entry_idx + max_hold_candles)
     
     for i in range(entry_idx + 1, search_end):
         current_low = df['low'].iloc[i]
+        current_high = df['high'].iloc[i]
         current_close = df['close'].iloc[i]
         current_time = df.index[i]
         
-        # Check Stop Loss (Trailing)
-        if current_low <= current_stop:
-            exit_price = current_stop
-            exit_time = current_time
-            exit_reason = "TRAILING_STOP_HIT"
-            exit_idx = i
-            break
+        # Check Stop Loss
+        if is_sell:
+            if current_high >= current_stop:
+                exit_price = current_stop
+                exit_time = current_time
+                exit_reason = "TRAILING_STOP_HIT"
+                break
+        else:
+            if current_low <= current_stop:
+                exit_price = current_stop
+                exit_time = current_time
+                exit_reason = "TRAILING_STOP_HIT"
+                break
             
-        # Strategy Logic: Update VP every 20 bars to find new support levels
+        # Update trailing stop every 10 bars
         if i - vp_last_updated >= 10:
             vp = calculate_volume_profile(df, start_idx=max(0, i-200), end_idx=i, precise=precise)
             if vp:
                 hvn_prices = vp['hvn_prices']
-                # Try to move stop up
-                # Find highest HVN below current price
-                hvns_below = [p for p in hvn_prices if p < current_close * 0.99] # Keep 1% buffer
-                
-                if hvns_below:
-                    potential_new_stop = max(hvns_below)
-                    
-                    # Conditions to move stop:
-                    # 1. Must be higher than current stop
-                    # 2. Must lock in at least 2% profit OR be better than initial stop (break-even logic etc)
-                    # Let's simple rule: Only move stop if it locks in > 1.5% profit
-                    
-                    if potential_new_stop > current_stop:
-                         if potential_new_stop > entry_price * 1.015:
-                             current_stop = potential_new_stop
+                if is_sell:
+                    # Trail stop DOWN for Shorts: Find lowest HVN ABOVE current price but BELOW current stop
+                    # Resistances
+                    resistances = [p for p in hvn_prices if p > current_close * 1.01] # 1% buffer
+                    if resistances:
+                        potential_new_stop = min(resistances)
+                        if potential_new_stop < current_stop:
+                            if potential_new_stop < entry_price * 0.985: # Require 1.5% profit before trailing
+                                current_stop = potential_new_stop
+                else:
+                    # Trail stop UP for Longs
+                    supports = [p for p in hvn_prices if p < current_close * 0.99] # 1% buffer
+                    if supports:
+                        potential_new_stop = max(supports)
+                        if potential_new_stop > current_stop:
+                            if potential_new_stop > entry_price * 1.015:
+                                current_stop = potential_new_stop
                 
             vp_last_updated = i
             
-        # Update exit values for max hold limit
         exit_price = current_close
         exit_time = current_time
-        exit_idx = i
     
     # Calculate PnL
-    exit_usd = btc_amount * exit_price
-    pnl = exit_usd - position_usd
-    pnl_pct = (exit_price / entry_price - 1) * 100
-    
-    # Hold duration in hours
+    if is_sell:
+        pnl_pct = (1 - exit_price / entry_price) * 100
+    else:
+        pnl_pct = (exit_price / entry_price - 1) * 100
+        
+    pnl = (position_usd * (pnl_pct / 100))
     hold_duration = (exit_time - entry_time).total_seconds() / 3600
     
     return {
@@ -120,7 +122,8 @@ def execute_trade(df, entry_idx, current_balance, position_size_pct=1.0, precise
         'pnl_pct': pnl_pct,
         'balance_after': current_balance + pnl,
         'hold_hours': hold_duration,
-        'reason': exit_reason
+        'reason': exit_reason,
+        'is_sell': is_sell
     }
 
 if __name__ == "__main__":

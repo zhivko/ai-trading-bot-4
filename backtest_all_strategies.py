@@ -3,14 +3,75 @@ import numpy as np
 import matplotlib.pyplot as plt
 from chart_generator import identify_hybrid_signals
 import importlib
+from concurrent.futures import ThreadPoolExecutor
 
 # Strategy Modules
 import backtest_strategy_1_poc_target as strategy_1
 import backtest_strategy_2_vah_exit as strategy_2
-import backtest_strategy_3_lvn_acceleration as strategy_3
-import backtest_strategy_4_multi_tier as strategy_4
+import backtest_strategy_3_optimized as strategy_3
+import backtest_strategy_4_optimized as strategy_4
 import backtest_strategy_5_trailing_stop as strategy_5
 import backtest_strategy_6_volume_divergence as strategy_6
+
+def generate_comparison_chart(final_df, output_path='strategy_comparison_chart.png'):
+    """Generate high-quality performance chart with legends and dual axes"""
+    import matplotlib.pyplot as plt
+    try:
+        fig, ax1 = plt.subplots(figsize=(12, 7))
+        plt.style.use('dark_background')
+        fig.patch.set_facecolor('#0b0e14')
+        ax1.set_facecolor('#0b0e14')
+        
+        # Primary axis: Total Return (%)
+        bars = ax1.bar(final_df['strategy_name'], final_df['total_return_pct'], 
+                       color='#00FFFF', alpha=0.7, edgecolor='white', label='Total Return (%)')
+        
+        ax1.set_title('High-Yield Strategy Comparison (50% Pos Size)\n(100 Days / 5% Drawdown Target)', 
+                      fontsize=16, color='white', pad=30, fontweight='bold')
+        ax1.set_ylabel('Total Return (%)', fontsize=12, color='#00FFFF', fontweight='bold')
+        ax1.tick_params(axis='y', labelcolor='#00FFFF')
+        plt.xticks(rotation=25, ha='right', color='white', fontsize=11)
+        
+        # Secondary axis: Win Rate (%)
+        ax2 = ax1.twinx()
+        ax2.step(final_df['strategy_name'], final_df['win_rate'], where='mid', 
+                 color='#39ff14', linewidth=3, marker='o', label='Win Rate (%)', alpha=0.9)
+        ax2.set_ylabel('Win Rate (%)', fontsize=12, color='#39ff14', fontweight='bold')
+        ax2.tick_params(axis='y', labelcolor='#39ff14')
+        ax2.set_ylim(0, 100)
+        
+        ax1.grid(axis='y', linestyle='--', alpha=0.2)
+        
+        for ax in [ax1, ax2]:
+            ax.spines['bottom'].set_color('white')
+            ax.spines['top'].set_color('white') 
+            ax.spines['right'].set_color('white')
+            ax.spines['left'].set_color('white')
+
+        # Add value labels for Return
+        for bar in bars:
+            yval = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2, yval + (0.5 if yval > 0 else -1.5), 
+                    f"{yval:.1f}%", va='bottom' if yval > 0 else 'top', ha='center', 
+                    color='white', fontsize=10, fontweight='bold', 
+                    bbox=dict(facecolor='black', alpha=0.5, edgecolor='none', pad=1))
+            
+        # Add values for Win Rate
+        for i, val in enumerate(final_df['win_rate']):
+            ax2.text(i, val + 2, f"{val:.1f}%", color='#39ff14', ha='center', fontsize=9, fontweight='bold')
+
+        # Add Combined Legend
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', frameon=True, 
+                   facecolor='black', edgecolor='white', fontsize=10)
+            
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        print(f"Comparison chart saved to {output_path}")
+        plt.close()
+    except Exception as e:
+        print(f"Warning: Could not generate comparison chart: {e}")
 
 def calculate_max_drawdown(trades, initial_capital):
     if not trades:
@@ -40,20 +101,18 @@ def calculate_sharpe_ratio(trades, risk_free_rate=0.0):
     sharpe = np.mean(returns) / np.std(returns)
     return sharpe
 
-def run_backtest(strategy_module, df, entry_indices, initial_capital=10000):
-    """Generic backtesting engine"""
+def run_backtest(strategy_module, df, entry_indices, initial_capital=10000, is_sell=False):
+    """Generic backtesting engine with Shorting support"""
     trades = []
     balance = initial_capital
     
-    print(f"  Executing {len(entry_indices)} trades...")
+    direction_str = "SHORT" if is_sell else "LONG"
+    print(f"  Executing {len(entry_indices)} {direction_str} trades...")
     
     for i, entry_idx in enumerate(entry_indices):
-        # Pass COPY of balance to avoid accumulating if we want independent trade stats?
-        # Actually we want sequential simulation to track compounding/drawdown
+        # Pass is_sell to the strategy module
+        trade_result = strategy_module.execute_trade(df, entry_idx, balance, is_sell=is_sell)
         
-        trade_result = strategy_module.execute_trade(df, entry_idx, balance)
-        
-        # Only record valid trades
         if trade_result['reason'] != 'VP_ERROR':
             trades.append(trade_result)
             balance = trade_result['balance_after']
@@ -93,10 +152,36 @@ def calculate_metrics(trades, initial_capital, final_balance):
     }
     return metrics
 
+def run_strategy_evaluation(name, module, df_processed, buy_indices, sell_indices, initial_cap=10000):
+    """Worker function to run bidirectional backtest for a single strategy"""
+    print(f"Starting Thread for: {name}")
+    
+    # Run Longs
+    long_trades, _ = run_backtest(module, df_processed, buy_indices, initial_capital=initial_cap, is_sell=False)
+    
+    # Run Shorts
+    short_trades, _ = run_backtest(module, df_processed, sell_indices, initial_capital=initial_cap, is_sell=True)
+    
+    # Combine all trades for this strategy
+    all_trades = long_trades + short_trades
+    # Sort by entry time for accurate drawdown/sharpe
+    all_trades.sort(key=lambda x: x['entry_time'])
+    
+    # Simulate sequential balance
+    current_balance = initial_cap
+    for t in all_trades:
+        t['balance_after'] = current_balance + t['pnl']
+        current_balance = t['balance_after']
+        
+    metrics = calculate_metrics(all_trades, initial_cap, current_balance)
+    metrics['strategy_name'] = name
+    
+    print(f"Finished: {name} | Return: {metrics['total_return_pct']:.2f}%")
+    return metrics
+
 def compare_strategies():
     """Run all strategies and create comparison table"""
     print("Loading data...")
-    # Load data
     try:
         df = pd.read_csv('BTCUSDT_15m_data.csv', index_col='timestamp', parse_dates=True)
         print(f"Loaded {len(df)} candles")
@@ -104,35 +189,27 @@ def compare_strategies():
         print(f"Error loading data: {e}")
         return
         
-    # Identify Signals ONLY ONCE
-    print("Identifying Hybrid Signals...")
-    # We need stochastics and channels calculated
-    # Chart generator logic usually does this inside, but let's assume identify_hybrid_signals handles it
-    # Note: identify_hybrid_signals expects raw DF and does calculations if needed
+    from chart_generator import identify_nn_patterns, get_nn_model
     
-    # We need to manually prep the DF as identify_hybrid_signals relies on columns existing?
-    # Let's check chart_generator.py... 
-    # It calls identify_quad_rotation_alarms -> identify_hybrid_signals
-    # We should use identify_quad_rotation_alarms to be safe and get full setup
-    
-    from chart_generator import identify_quad_rotation_alarms
-    
-    # Process latest 5000 candles for speed, or full dataset?
-    # Full dataset is 289k candles... might be slow.
-    # Let's take last 50,000 candles (approx 1.5 years)
-    df_slice = df.tail(50000).copy()
-    
-    print(f"Processing {len(df_slice)} candles...")
-    df_processed = identify_quad_rotation_alarms(df_slice)
+    # Load Unified Model
+    model = get_nn_model()
+    if model is None:
+        print("CRITICAL: Failed to load NN Unified Model. Backtest aborted.")
+        return
+
+    # Process dataset (last 100 days)
+    df_slice = df.tail(10000).copy()
+    print(f"Processing {len(df_slice)} candles for Unified Model Inference...")
+    df_processed = identify_nn_patterns(df_slice, nn_threshold=0.30)
     
     # Filter for entries
-    # Hybrid Alarm is our entry signal
-    entry_mask = df_processed['hybrid_alarm'] == True
-    entry_indices = np.where(entry_mask)[0] # Integer indices
+    buy_indices = np.where(df_processed['nn_buy_alarm'])[0]
+    sell_indices = np.where(df_processed['nn_sell_alarm'])[0]
     
-    print(f"Found {len(entry_indices)} Hybrid Entry Signals")
+    print(f"Found {len(buy_indices)} BUY Signals and {len(sell_indices)} SELL Signals")
     
-    strategies = [
+    # Base strategies to compare
+    base_strategies = [
         ('1. POC Target', strategy_1),
         ('2. VAH Exit', strategy_2),
         ('3. LVN Accel', strategy_3),
@@ -142,35 +219,41 @@ def compare_strategies():
     ]
     
     results = []
+    initial_cap = 10000
     
-    for name, module in strategies:
-        print(f"\n{'='*60}")
-        print(f"Running Strategy: {name}")
-        print('='*60)
+    # Use ThreadPoolExecutor for parallel strategy evaluation
+    print(f"\nStarting Threaded Backtest for {len(base_strategies)} strategies...")
+    with ThreadPoolExecutor(max_workers=len(base_strategies)) as executor:
+        # Submit all strategy evaluations to the pool
+        future_to_strategy = {
+            executor.submit(run_strategy_evaluation, name, module, df_processed, buy_indices, sell_indices, initial_cap): name 
+            for name, module in base_strategies
+        }
         
-        # Run Backtest
-        trades, final_balance = run_backtest(module, df_processed, entry_indices)
-        metrics = calculate_metrics(trades, 10000, final_balance)
-        metrics['strategy_name'] = name
-        results.append(metrics)
-        
-        print(f"Return: {metrics['total_return_pct']:.2f}% | Win Rate: {metrics['win_rate']:.1f}% | PnL: ${metrics['total_pnl']:.2f}")
-    
+        for future in future_to_strategy:
+            try:
+                metrics = future.result()
+                results.append(metrics)
+            except Exception as exc:
+                name = future_to_strategy[future]
+                print(f"Strategy {name} generated an exception: {exc}")
+
     # Create DataFrame
     comparison_df = pd.DataFrame(results)
-    
-    # Select key columns
-    cols = ['strategy_name', 'total_return_pct', 'win_rate', 'total_pnl', 'max_drawdown_pct', 'sharpe_ratio', 'avg_hold_time_hours', 'total_trades']
+    cols = ['strategy_name', 'total_return_pct', 'win_rate', 'total_pnl', 'max_drawdown_pct', 'sharpe_ratio', 'total_trades']
     final_df = comparison_df[cols].sort_values('total_return_pct', ascending=False)
     
-    print("\n" + "="*100)
-    print("STRATEGY COMPARISON RESULTS (Last 50,000 Candles ~1.5 Years)")
-    print("="*100)
+    print("\n" + "="*110)
+    print("BIDIRECTIONAL STRATEGY COMPARISON (Combined Longs + Shorts)")
+    print("="*110)
     print(final_df.to_string(index=False, float_format=lambda x: "{:.2f}".format(x)))
     
     # Save to CSV
     final_df.to_csv('strategy_comparison_results.csv', index=False)
     print("\nResults saved to strategy_comparison_results.csv")
+    
+    # Generate Comparison Chart
+    generate_comparison_chart(final_df)
     
     return final_df
 

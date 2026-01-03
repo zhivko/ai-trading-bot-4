@@ -716,6 +716,16 @@
                 document.getElementById('stratDesc').textContent = data.description;
                 document.getElementById('strategyDescription').value = data.description;
 
+                const markerTypeEl = document.getElementById('markerType');
+                if (data.is_sell) {
+                    markerTypeEl.textContent = "High-Conviction SELL";
+                    markerTypeEl.style.color = "#ff4444";
+                } else {
+                    markerTypeEl.textContent = "High-Conviction BUY";
+                    markerTypeEl.style.color = "#39ff14";
+                }
+                document.getElementById('markerTime').textContent = new Date(timestamp).toLocaleString();
+
                 if (data.entry_price) {
                     document.getElementById('previewEntry').textContent = data.entry_price.toLocaleString();
                     document.getElementById('previewSL').textContent = data.stop_loss.toLocaleString();

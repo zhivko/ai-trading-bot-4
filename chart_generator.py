@@ -78,7 +78,7 @@ class PatternDetectorCNN(nn.Module):
             nn.Dropout(0.4),
             nn.Linear(1024, 256),
             nn.ReLU(),
-            nn.Linear(256, 1)
+            nn.Linear(256, 3) # 3 Classes: 0=Hold, 1=Buy, 2=Sell
         )
 
     def forward(self, x_ts, x_vp):
@@ -102,7 +102,7 @@ def get_nn_model():
             if _NN_MODEL is None:
                 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
                 # Optimization: Load model tailored for 5090 inference
-                model_path = os.path.join(os.path.dirname(__file__), "stoch_vp_detector_15m.pth")
+                model_path = os.path.join(os.path.dirname(__file__), "stoch_vp_unified_15m.pth")
                 
                 if os.path.exists(model_path):
                     try:
@@ -116,7 +116,7 @@ def get_nn_model():
                         model.to(device)
                         model.eval()
                         _NN_MODEL = model
-                        print(f"NN Model (Dual-Input) loaded successfully on {device} (Singleton Initialized)")
+                        print(f"NN Unified Model (3-Class) loaded successfully on {device}")
                     except Exception as e:
                         print(f"Error loading NN Model: {e}")
     return _NN_MODEL
@@ -137,11 +137,12 @@ def identify_nn_patterns(df, nn_threshold=30):
         cache_key = (df.index[-1], len(df), nn_threshold)
         if cache_key in _NN_CACHE:
             cached_data = _NN_CACHE[cache_key]
-            if isinstance(cached_data, tuple):
-                df['nn_alarm'], df['nn_confidence'] = cached_data
-            else:
-                df['nn_alarm'] = cached_data
-                df['nn_confidence'] = 0.0
+            # Handle new cache format: (buy_alarm, sell_alarm, buy_confidence, sell_confidence)
+            if isinstance(cached_data, tuple) and len(cached_data) == 4:
+                df['nn_buy_alarm'], df['nn_sell_alarm'], df['nn_buy_confidence'], df['nn_sell_confidence'] = cached_data
+                # For backward compatibility, map buy_alarm to nn_alarm
+                df['nn_alarm'] = df['nn_buy_alarm']
+                df['nn_confidence'] = df['nn_buy_confidence']
             return df
     
     # Stochastic Calculation (Same as training)
@@ -152,8 +153,10 @@ def identify_nn_patterns(df, nn_threshold=30):
     stoch = 100 * ((df['close'] - low_min) / (high_max - low_min))
     stoch_vals = (stoch.rolling(window=smooth_k).mean() / 100.0).values
     
-    nn_results = np.zeros(len(df), dtype=bool)
-    nn_confidences = np.zeros(len(df), dtype=float)
+    nn_buy_results = np.zeros(len(df), dtype=bool)
+    nn_sell_results = np.zeros(len(df), dtype=bool)
+    nn_buy_confidences = np.zeros(len(df), dtype=float)
+    nn_sell_confidences = np.zeros(len(df), dtype=float)
     
     window_size = 100
     # Optimization: For live chart interaction, we DO NOT need to calculate NN for the entire history (years of data).
@@ -220,54 +223,72 @@ def identify_nn_patterns(df, nn_threshold=30):
                     t_vp = torch.FloatTensor(batch_vp).to(device)
                     
                     logits = model(t_ts, t_vp)
-                    probs = torch.sigmoid(logits).cpu().numpy().flatten()
+                    probs = torch.softmax(logits, dim=1).cpu().numpy()
                     probs_all.extend(probs)
             
-            probs_all = np.array(probs_all)
+            probs_all = np.array(probs_all) # Shape: [N, 3]
             
             # --- AGGRESSIVE SUPPRESSION LOGIC (NMS) ---
             threshold = nn_threshold / 100.0 
             
-            # 2. Local Peak Detection / Cooldown (30 bars ~ 7.5 hours)
-            final_results = np.zeros_like(probs_all, dtype=bool)
+            buy_probs = probs_all[:, 1]
+            sell_probs = probs_all[:, 2]
+            
+            final_buy = np.zeros_like(buy_probs, dtype=bool)
+            final_sell = np.zeros_like(sell_probs, dtype=bool)
             cooldown = 30
             
-            for idx, prob in enumerate(probs_all):
-                if prob > threshold:
-                    # Check if this is the maximum in [idx-cooldown, idx+cooldown]
+            for idx in range(len(probs_all)):
+                p_buy = buy_probs[idx]
+                p_sell = sell_probs[idx]
+                
+                # Check BUY peak
+                if p_buy > threshold:
                     start = max(0, idx - cooldown)
-                    end = min(len(probs_all), idx + cooldown + 1)
-                    
-                    if prob == np.max(probs_all[start:end]):
-                        final_results[idx] = True
+                    end = min(len(buy_probs), idx + cooldown + 1)
+                    if p_buy == np.max(buy_probs[start:end]):
+                        final_buy[idx] = True
+                
+                # Check SELL peak
+                if p_sell > threshold:
+                    start = max(0, idx - cooldown)
+                    end = min(len(sell_probs), idx + cooldown + 1)
+                    if p_sell == np.max(sell_probs[start:end]):
+                        final_sell[idx] = True
             
-            nn_results[valid_indices] = final_results
-            nn_confidences[valid_indices] = probs_all
+            nn_buy_results[valid_indices] = final_buy
+            nn_sell_results[valid_indices] = final_sell
+            nn_buy_confidences[valid_indices] = buy_probs
+            nn_sell_confidences[valid_indices] = sell_probs
             
-            # Debug: Print detection stats and top scores
-            detected_count = np.sum(final_results)
-            if detected_count > 0:
-                print(f"NN Stochastic Low Detection: Found {detected_count} patterns (threshold={nn_threshold}%)")
+            # Debug: Print detection stats
+            print(f"NN Unified Detection: Found {np.sum(final_buy)} BUY, {np.sum(final_sell)} SELL patterns")
             
-            # Show top 5 confidence scores to help tune threshold
-            if len(probs_all) > 0:
-                top_indices = np.argsort(probs_all)[-5:][::-1]  # Top 5 highest scores
-                print(f"Top 5 NN confidence scores:")
+            # Show top 5 confidence scores for BUY signals
+            if len(buy_probs) > 0:
+                top_indices = np.argsort(buy_probs)[-5:][::-1]
+                print(f"Top 5 NN BUY confidence scores:")
                 for idx in top_indices:
                     actual_idx = valid_indices[idx]
                     timestamp = df.index[actual_idx]
-                    print(f"  - {timestamp}: {probs_all[idx]*100:.1f}% confidence")
+                    print(f"  - {timestamp}: {buy_probs[idx]*100:.1f}% confidence")
             
             t_inf_total = time.time() - t_inf_start
             print(f"  - Total Model Inference: {t_inf_total:.4f}s")
                 
-    df['nn_alarm'] = nn_results
-    df['nn_confidence'] = nn_confidences
+    df['nn_buy_alarm'] = nn_buy_results
+    df['nn_sell_alarm'] = nn_sell_results
+    df['nn_buy_confidence'] = nn_buy_confidences
+    df['nn_sell_confidence'] = nn_sell_confidences
+    
+    # Backward compatibility
+    df['nn_alarm'] = nn_buy_results
+    df['nn_confidence'] = nn_buy_confidences
     
     # --- CACHE STORAGE ---
     if not df.empty:
         cache_key = (df.index[-1], len(df), nn_threshold)
-        _NN_CACHE[cache_key] = (nn_results, nn_confidences)
+        _NN_CACHE[cache_key] = (nn_buy_results, nn_sell_results, nn_buy_confidences, nn_sell_confidences)
         
         # Limit cache size to prevent memory leaks (keep last 20)
         if len(_NN_CACHE) > 20:
@@ -421,9 +442,15 @@ def identify_quad_rotation_alarms(df, nn_threshold=30):
         if len(cached_df) == len(df) and (cached_df.index == df.index).all():
             print(f"[CACHE HIT] Using cached NN detection results (threshold={nn_threshold}%)")
             # Copy cached columns to current df
-            for col in ['nn_alarm', 'hybrid_alarm', 'alarm', 'stoch_9_3', 'stoch_14_3', 'stoch_40_4', 'stoch_60_10', 'slope', 'nn_confidence']:
+            cols = ['nn_buy_alarm', 'nn_sell_alarm', 'hybrid_alarm', 'alarm', 
+                    'stoch_9_3', 'stoch_14_3', 'stoch_40_4', 'stoch_60_10', 'slope', 
+                    'nn_buy_confidence', 'nn_sell_confidence']
+            for col in cols:
                 if col in cached_df.columns:
                     df[col] = cached_df[col]
+            # Legacy mapping
+            df['nn_alarm'] = df['nn_buy_alarm']
+            df['nn_confidence'] = df['nn_buy_confidence']
             return df
     
     print(f"[CACHE MISS] Running full detection (threshold={nn_threshold}%)")
@@ -706,17 +733,33 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
                 row=1, col=1
             )
 
-    # Add Neural Network detected 'W' patterns
-    if 'nn_alarm' in chart_df.columns:
-        nn_df = chart_df[chart_df['nn_alarm'] & (~chart_df.get('hybrid_alarm', False))].copy()
-        if not nn_df.empty:
+    # Add Neural Network detected patterns (Unified Model)
+    if 'nn_buy_alarm' in chart_df.columns:
+        # 1. BUY Patterns (Star markers)
+        nn_buy_df = chart_df[chart_df['nn_buy_alarm'] & (~chart_df.get('hybrid_alarm', False))].copy()
+        if not nn_buy_df.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=nn_df.index.strftime('%Y-%m-%dT%H:%M:%S'),
-                    y=(nn_df['low'] - marker_offset * 2).tolist(), # Place below candle low
+                    x=nn_buy_df.index.strftime('%Y-%m-%dT%H:%M:%S'),
+                    y=(nn_buy_df['low'] - marker_offset * 1.5).tolist(),
                     mode='markers',
-                    marker=dict(symbol='star', size=10, color='#4A90E2', line=dict(width=1, color='white')),
-                    name='Neural Network: W-Pattern (Unconfirmed)',
+                    marker=dict(symbol='star', size=11, color='#00FF00', line=dict(width=1, color='white')),
+                    name='NN: High-Conviction BUY',
+                    hoverinfo='x+y+name'
+                ),
+                row=1, col=1
+            )
+            
+        # 2. SELL Patterns (Star markers)
+        nn_sell_df = chart_df[chart_df['nn_sell_alarm']].copy()
+        if not nn_sell_df.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=nn_sell_df.index.strftime('%Y-%m-%dT%H:%M:%S'),
+                    y=(nn_sell_df['high'] + marker_offset * 1.5).tolist(),
+                    mode='markers',
+                    marker=dict(symbol='star', size=11, color='#FF3131', line=dict(width=1, color='white')),
+                    name='NN: High-Conviction SELL',
                     hoverinfo='x+y+name'
                 ),
                 row=1, col=1
