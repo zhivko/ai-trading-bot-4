@@ -46,14 +46,12 @@ if [ ! -d ".venv" ]; then
     python3 -m venv .venv
 fi
 
-source .venv/bin/activate
-
 # Install dependencies
 echo "Installing Python dependencies..."
-pip install --upgrade pip
+./.venv/bin/pip install --upgrade pip
 # Install CPU-only torch to save resources on server, unless GPU is required
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt
+./.venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+./.venv/bin/pip install -r requirements.txt
 
 # 4. Environment Variables
 echo -e "${GREEN}[4/5] Checking Configuration...${NC}"
