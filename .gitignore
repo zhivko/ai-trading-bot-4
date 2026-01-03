@@ -12,3 +12,4 @@
 ai-trading-bot-4
 /.env
 /apex_integration/.env
+.env

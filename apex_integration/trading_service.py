@@ -1347,6 +1347,29 @@ async def update_stop_loss(symbol: str, stop_loss: float):
         logger.error(f"Error updating SL: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# State Persistence
+TRADES_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "active_trades.json")
+
+def load_trades_state():
+    """Load active trades state from JSON file."""
+    if os.path.exists(TRADES_DB_PATH):
+        try:
+            with open(TRADES_DB_PATH, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load trades state: {e}")
+    return {}
+
+def save_trades_state(state):
+    """Save active trades state to JSON file."""
+    try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(TRADES_DB_PATH), exist_ok=True)
+        with open(TRADES_DB_PATH, 'w') as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save trades state: {e}")
+
 @app.get("/tracking-status")
 async def get_tracking_status():
     """Get the current state of autonomous trailing stop tracking."""
@@ -1356,11 +1379,16 @@ async def get_tracking_status():
     }
 
 # --- TRAILING STOP BACKGROUND MONITORING ---
-active_trades_tracking = {}
+active_trades_tracking = load_trades_state() # Initialize from Disk
 
 async def monitor_trailing_stops_loop():
     """Background task to monitor positions and update trailing stops autonomously."""
     logger.info("Starting background trailing stop monitor...")
+    global active_trades_tracking
+    
+    # Reload state on startup to be sure
+    active_trades_tracking = load_trades_state()
+    
     while True:
         try:
             # 1. Fetch current positions efficiently
@@ -1407,7 +1435,8 @@ async def monitor_trailing_stops_loop():
                         'lowest_price': current_price if side == 'SHORT' else float('inf'),
                         'last_sl': current_sl, 
                         'side': side,
-                        'entry_price': entry_price
+                        'entry_price': entry_price,
+                        'sl_history': [{'ts': time.time(), 'sl': current_sl}] if current_sl > 0 else []
                     }
                     logger.info(f"Monitor: Started tracking {symbol} {side} with Initial SL: {current_sl}")
 
@@ -1463,6 +1492,9 @@ async def monitor_trailing_stops_loop():
                                  # Apex Pro often uses triggerPrice for stop orders
                                  if ('STOP' in order_type or trigger_price > 0) and trigger_price > 0:
                                      trade['last_sl'] = trigger_price
+                                     # Record initial detection in history if empty
+                                     if not trade.get('sl_history'):
+                                         trade['sl_history'] = [{'ts': time.time(), 'sl': trigger_price}]
                                      logger.info(f"Monitor: Auto-detected existing SL for {symbol}: {trigger_price}")
                                      break
                     except Exception as e:
@@ -1521,16 +1553,26 @@ async def monitor_trailing_stops_loop():
                                 )
                             except: pass # Don't crash loop on notification failure
 
-                        trade['last_sl'] = new_sl_value
+                        # Update History (keep last 5)
+                        history = trade.get('sl_history', [])
+                        history.append({'ts': time.time(), 'sl': new_sl_value})
+                        trade['sl_history'] = history[-5:]
+                        
                         logger.info(f"Trailing: Successfully updated {symbol} SL to {new_sl_value:.2f}")
+                        
+                        # Persist State
+                        save_trades_state(active_trades_tracking)
+                        
                     except Exception as sl_err:
                         logger.error(f"Trailing: Update failed for {symbol}: {sl_err}")
 
+            # 5. Cleanup closed positions
             # 5. Cleanup closed positions
             for sym in list(active_trades_tracking.keys()):
                 if sym not in current_symbols:
                     logger.info(f"Monitor: Position {sym} closed, removing from tracker.")
                     del active_trades_tracking[sym]
+                    save_trades_state(active_trades_tracking)
 
         except Exception as e:
             logger.error(f"Error in trailing stop monitor loop: {e}")
