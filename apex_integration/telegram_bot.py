@@ -203,6 +203,14 @@ async def trades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             side = trade.get('side', 'UNKNOWN')
             sl = trade.get('last_sl', 0)
             
+            entry = trade.get('entry_price', 0)
+            current = trade.get('current_price', 0)
+            pnl_val = trade.get('pnl_value', 0)
+            pnl_pct = trade.get('pnl_percent', 0)
+            open_time = trade.get('open_time', 'Unknown')
+            
+            pnl_emoji = "🟢" if pnl_val >= 0 else "🔴"
+            
             if side == 'LONG':
                 best = trade.get('highest_price', 0)
                 best_label = "Highest"
@@ -210,9 +218,13 @@ async def trades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 best = trade.get('lowest_price', 0)
                 best_label = "Lowest"
                 
-            msg += f"🔹 **{symbol}** ({side})\n"
+            msg += f"{pnl_emoji} **{symbol}** ({side})\n"
+            msg += f"• ⏱ Opened: {open_time}\n"
+            msg += f"• 🚪 Entry: {entry:.2f}\n"
+            msg += f"• 📍 Current: {current:.2f}\n"
+            msg += f"• 💰 PNL: **{pnl_pct:.2f}%** (${pnl_val:.2f})\n"
             msg += f"• {best_label}: {best:.2f}\n"
-            msg += f"• Active SL: {sl:.2f}\n\n"
+            msg += f"• 🛑 Active SL: {sl:.2f}\n\n"
 
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 

@@ -1377,20 +1377,74 @@ async def monitor_trailing_stops_loop():
                 side = pos.get('side')
                 entry_price = float(pos.get('entryPrice', 0))
                 mark_price = float(pos.get('markPrice', 0))
+                created_at_ms = int(pos.get('createdAt', 0)) # Epoch ms
                 
                 # Fetch ticker for real-time calculation if markPrice is stale? 
                 # (get_current_price is already used in calculate_account_value)
                 current_price = mark_price if mark_price > 0 else float(get_current_price(symbol))
                 
+                # Determine current SL from exchange if available, otherwise 0.0
+                current_sl = 0.0
+                try:
+                    open_orders_resp = client.open_orders_v3()
+                    orders_list = open_orders_resp.get('data', [])
+                    sl_side = 'SELL' if side == 'LONG' else 'BUY'
+                    
+                    for order in orders_list:
+                         if order.get('symbol') == symbol and order.get('side') == sl_side:
+                             order_type = order.get('type', '')
+                             trigger_price = float(order.get('triggerPrice') or 0)
+                             if ('STOP' in order_type or trigger_price > 0) and trigger_price > 0:
+                                 current_sl = trigger_price
+                                 break
+                except Exception as e:
+                    logger.debug(f"Failed to probe SL for {symbol} during initialization: {e}")
+
                 # 2. Position Tracking Initializer
                 if symbol not in active_trades_tracking:
                     active_trades_tracking[symbol] = {
                         'highest_price': current_price if side == 'LONG' else 0,
                         'lowest_price': current_price if side == 'SHORT' else float('inf'),
-                        'last_sl': 0.0, 
-                        'side': side
+                        'last_sl': current_sl, 
+                        'side': side,
+                        'entry_price': entry_price
                     }
-                    logger.info(f"Monitor: Started tracking {symbol} {side}")
+                    logger.info(f"Monitor: Started tracking {symbol} {side} with Initial SL: {current_sl}")
+
+                # Calculate PNL for display
+                pnl_val = 0.0
+                pnl_pct = 0.0
+                if entry_price > 0:
+                    if side == 'LONG':
+                        pnl_val = size * (current_price - entry_price)
+                        pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                    else:
+                        pnl_val = size * (entry_price - current_price)
+                        pnl_pct = ((entry_price - current_price) / entry_price) * 100
+
+                # Format Creation Time (CET+1)
+                # Server usually UTC, we want CET (UTC+1)
+                from datetime import datetime, timedelta
+                try:
+                    if created_at_ms > 0:
+                        # createdAt is usually ms
+                        utc_dt = datetime.utcfromtimestamp(created_at_ms / 1000)
+                        cet_dt = utc_dt + timedelta(hours=1)
+                        open_time_str = cet_dt.strftime('%H:%M:%S %d-%m')
+                    else:
+                        open_time_str = "Unknown"
+                except:
+                    open_time_str = "Unknown"
+
+                # Update live stats in tracker
+                active_trades_tracking[symbol].update({
+                    'current_price': current_price,
+                    'entry_price': entry_price,
+                    'pnl_value': pnl_val,
+                    'pnl_percent': pnl_pct,
+                    'open_time': open_time_str,
+                    'timestamp': time.time()
+                })
 
                 # 3. Trailing Stop Logic
                 trade = active_trades_tracking[symbol]
@@ -1418,14 +1472,30 @@ async def monitor_trailing_stops_loop():
                 trail_trigger_pct = 0.02 # Trail if price moves 2% in favor
 
                 if side == 'LONG':
-                    if current_price > trade['highest_price']:
+                    # Logic 1: Restore missing SL
+                    if trade.get('last_sl') == 0:
+                         # Default SL: 1% below entry if we don't have one
+                         entry = trade.get('entry_price', current_price)
+                         new_sl_value = entry * 0.99
+                         logger.info(f"Monitor: Restoring missing SL for LONG {symbol} to {new_sl_value}")
+
+                    # Logic 2: Trailing Stop
+                    elif current_price > trade['highest_price']:
                         trade['highest_price'] = current_price
                         # Tighten SL to 2% below highest (only if better than current)
                         potential_sl = current_price * 0.98
                         if potential_sl > trade['last_sl']:
                             new_sl_value = potential_sl
                 else: # SHORT
-                    if current_price < trade['lowest_price']:
+                    # Logic 1: Restore missing SL
+                    if trade.get('last_sl') == 0:
+                         # Default SL: 1% above entry
+                         entry = trade.get('entry_price', current_price)
+                         new_sl_value = entry * 1.01
+                         logger.info(f"Monitor: Restoring missing SL for SHORT {symbol} to {new_sl_value}")
+
+                    # Logic 2: Trailing Stop
+                    elif current_price < trade['lowest_price']:
                         trade['lowest_price'] = current_price
                         potential_sl = current_price * 1.02
                         if trade['last_sl'] == 0 or potential_sl < trade['last_sl']:
