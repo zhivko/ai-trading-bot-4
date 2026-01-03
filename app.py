@@ -8,6 +8,7 @@ import time
 import sys
 from chart_generator import generate_chart_data, get_chart_metadata, get_nn_model
 from data_updater import update_data_files
+import alarm_service
 
 app = Flask(__name__)
 
@@ -264,6 +265,7 @@ def trigger_update():
     global last_update_time
     try:
         update_data_files()
+        alarm_service.check_and_notify_all()
         last_update_time = datetime.now()
         return jsonify({
             'status': 'success',
@@ -285,6 +287,9 @@ def background_update_task():
             update_data_files()
             last_update_time = datetime.now()
             print(f"[{datetime.now()}] Update completed successfully")
+            
+            # Check for alarms after data update
+            alarm_service.check_and_notify_all()
         except Exception as e:
             print(f"[{datetime.now()}] Error in background update: {e}")
 
