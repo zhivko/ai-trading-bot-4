@@ -135,18 +135,18 @@ We have successfully achieved the **5% Drawdown Target** by scaling all strategi
 > **Strategy 3 Optimized (v2)** is our current "Capital Efficiency" champion, generating **37.34% profit** in 100 days—beating pure trend strategies while remaining within our strict **5% drawdown** risk profile.
 
 #### High-Yield Performance Visualization
-![High Yield Comparison Final](C:/Users/Admin/.gemini/antigravity/brain/1ee488d3-7c54-4c3f-ba01-846f24bd65df/strategy_high_yield_comparison.png)
+![High Yield Comparison Final](/c:/git/ai-trading-bot-4/assets/high_yield_comparison.png)
 
 ### 📈 Verification: Unified Model Inference
 The model successfully identifies both peaks (SELL) and troughs (BUY) using the unified inference engine.
 
-![Final Chart Detections](C:/Users/Admin/.gemini/antigravity/brain/1ee488d3-7c54-4c3f-ba01-846f24bd65df/chart_with_markers_1767421667584.png)
+![Final Chart Detections](/c:/git/ai-trading-bot-4/assets/chart_detections.png)
 
 ### 🖱️ Sidebar Marker Interaction
 You can now click on any neural network marker to see a detailed trade setup in the sidebar, including a **Mini Volume Profile** focused on the local accumulation zone.
 
 ````carousel
-![Buy Marker Sidebar Proof](C:/Users/Admin/.gemini/antigravity/brain/1ee488d3-7c54-4c3f-ba01-846f24bd65df/buy_marker_sidebar_1767421766832.png)
+![Buy Marker Sidebar Proof](/c:/git/ai-trading-bot-4/assets/buy_sidebar.png)
 <!-- slide -->
-![Sell Marker Sidebar Proof](C:/Users/Admin/.gemini/antigravity/brain/1ee488d3-7c54-4c3f-ba01-846f24bd65df/sell_marker_sidebar_1767421783945.png)
+![Sell Marker Sidebar Proof](/c:/git/ai-trading-bot-4/assets/sell_sidebar.png)
 ````
