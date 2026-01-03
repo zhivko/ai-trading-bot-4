@@ -19,14 +19,12 @@ def generate_chart_image(filepath, symbol, timeframe, num_candles=100):
         
         # Adjust layout for static image
         fig.update_layout(
-            width=1000,
-            height=800,
+            width=1200,      # Increased width
+            height=1400,     # SIGNIFICANTLY increased height for 6 subplots
             template="plotly_dark",
-            title=dict(
-                text=f"{symbol} {timeframe} - AI Trading Signal",
-                x=0.5,
-                font=dict(size=24)
-            ),
+            # Remove title from layout to avoid cropping, use caption in Telegram
+            title=None, 
+            margin=dict(l=60, r=60, t=60, b=100), # Larger margins
             # Remove range slider for cleaner image
             xaxis=dict(rangeslider=dict(visible=False))
         )
@@ -120,14 +118,14 @@ def generate_mini_vp_image(filepath, symbol, timeframe):
 
         # Layout
         fig.update_layout(
-            width=400,
-            height=600,
+            width=500,       # Slightly wider
+            height=800,      # Taller
             template="plotly_dark",
-            title=dict(text="Market Structure (VP)", x=0.5),
-            margin=dict(l=20, r=20, t=40, b=20),
+            title=dict(text="Market Structure (VP)", x=0.5, font=dict(size=20)),
+            margin=dict(l=40, r=40, t=80, b=40),
             showlegend=False,
             xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
-            yaxis=dict(showgrid=True, showticklabels=True),
+            yaxis=dict(showgrid=True, showticklabels=True, side='left'),
             paper_bgcolor='rgba(15, 12, 41, 1)', # Match sidebar dark blue/purple
             plot_bgcolor='rgba(0,0,0,0)'
         )
@@ -138,6 +136,7 @@ def generate_mini_vp_image(filepath, symbol, timeframe):
         output_path = os.path.join(tmp_dir, f"vp_{symbol}_{timeframe}.png")
         
         from kaleido.scopes.plotly import PlotlyScope
+        # Use a fresh scope or handle it robustly
         scope = PlotlyScope()
         with open(output_path, "wb") as f:
             f.write(scope.transform(fig, format="png"))

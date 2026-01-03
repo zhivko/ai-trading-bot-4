@@ -193,91 +193,95 @@ def get_symbol_config(symbol_list: list, symbol: str) -> dict:
     return None
 
 def get_current_price(symbol: str) -> str:
-    """Get current price for symbol"""
+    """Get current price for symbol (e.g. BTC-USDT) by querying non-hyphenated symbol (BTCUSDT)"""
     try:
-        # Remove all hyphens same as order placement (consistent with API)
+        # Standardize: remove all hyphens for the API ticker call
         ticker_symbol = symbol.replace('-', '')
-        # logger.debug(f"Requesting ticker for {ticker_symbol}")
         ticker_data = client_public.ticker_v3(symbol=ticker_symbol)
-        # logger.debug(f"Ticker response: {ticker_data}")
 
-        # Handle the APEX API ticker response format: {"data": [...], "timeCost": ...}
         data_list = ticker_data.get("data")
         if data_list and isinstance(data_list, list) and len(data_list) > 0:
-            ticker_info = data_list[0]  # Get first item from data list
-            # Use lastPrice or markPrice from the ticker data
-            price = ticker_info.get("lastPrice") or ticker_info.get("markPrice", "0")
-            # logger.debug(f"Price found: {price}")
-            return price
+            ticker_info = data_list[0]
+            # Use lastPrice, markPrice or indexPrice
+            price = ticker_info.get("lastPrice") or ticker_info.get("markPrice") or ticker_info.get("indexPrice", "0")
+            return str(price)
 
-        # logger.debug("No valid ticker data found")
         return "0"
     except Exception as e:
         logger.error(f"Error getting price for {symbol}: {e}")
         return "0"
 
 def calculate_account_value() -> Dict[str, Any]:
-    """Calculate current account value and return structured data"""
+    """Calculate current account value (Total Equity) matching Apex Omni dashboard logic"""
     try:
-        # Get account data
+        # Get account data - Wallets and Positions are included here
         account = client.get_account_v3()
         if not account:
             raise ValueError("Could not fetch account data")
 
-        # Get symbol configurations
-        symbol_list = client.configs().get("data", {}).get("perpetualContract", [])
-
-        # Calculate wallet values
+        # Extract wallets
         contract_wallets = account.get('contractWallets', [])
         spot_wallets = account.get('spotWallets', [])
+        
+        # 1. Sum ALL wallet balances (Net Cash)
         total_wallet_value = decimal.Decimal('0.0')
-
-        for wallet in contract_wallets + spot_wallets:
+        for wallet in contract_wallets + (spot_wallets or []):
             balance = decimal.Decimal(wallet.get('balance', '0'))
             token = wallet.get('token', wallet.get('tokenId', 'UNKNOWN'))
-
-            if token == 'USDT' or token == '141':
-                value = balance
-            elif token == 'ETH' or token == '36':
-                eth_price = get_current_price('ETH-USDT')
-                if eth_price and eth_price != "0":
-                    value = balance * decimal.Decimal(eth_price)
+            
+            # Treat USDT and token ID 141 as 1:1 USDT
+            if token in ['USDT', '141']:
+                total_wallet_value += balance
+            elif token in ['ETH', '36']:
+                # Convert ETH to USDT equivalent
+                eth_current = get_current_price('ETH-USDT')
+                if eth_current and eth_current != "0":
+                    total_wallet_value += balance * decimal.Decimal(eth_current)
                 else:
-                    value = balance
-            else:
-                value = decimal.Decimal('0')
+                    total_wallet_value += balance # Fallback if price missing
 
-            total_wallet_value += value
-
-        # Calculate position P&L
+        # 2. Add full Notional Value of all positions (Apex Omni balance includes entry costs)
         positions = account.get('positions', [])
-        total_unrealized_pnl = decimal.Decimal('0.0')
+        total_notional_value = decimal.Decimal('0.0')
+        total_pnl = decimal.Decimal('0.0')
 
-        for position in positions:
-            symbol = position.get('symbol', '')
-            size = decimal.Decimal(position.get('size', '0'))
-            entry_price = decimal.Decimal(position.get('entryPrice', '0'))
+        for pos in positions:
+            size_raw = pos.get('size', '0')
+            size = decimal.Decimal(size_raw)
+            if size == 0:
+                continue
+            
+            symbol = pos.get('symbol', '')
+            entry_price = decimal.Decimal(pos.get('entryPrice', '0'))
+            
+            # Fetch current price for this position
             current_price_str = get_current_price(symbol)
-            current_price = decimal.Decimal(current_price_str) if current_price_str else decimal.Decimal('0')
+            if current_price_str == "0":
+                # Fallback to entry price if fetch fails
+                current_price = entry_price
+            else:
+                current_price = decimal.Decimal(current_price_str)
+            
+            # Notional Value = size * current_price
+            if pos.get('side') == 'LONG':
+                total_notional_value += (size * current_price)
+                if entry_price > 0:
+                    total_pnl += size * (current_price - entry_price)
+            else: # SHORT
+                if entry_price > 0:
+                    total_pnl += size * (entry_price - current_price)
 
-            if size != 0 and entry_price != 0:
-                if position.get('side') == 'LONG':
-                    pnl = size * (current_price - entry_price)
-                else:  # SHORT
-                    pnl = size * (entry_price - current_price)
-                total_unrealized_pnl += pnl
-
-        total_account_value = float(total_wallet_value + total_unrealized_pnl)
+        # TOTAL EQUITY = Cash Balances + Notional Value (Longs) + P&L
+        total_account_value = total_wallet_value + total_notional_value
 
         return {
-            "totalAccountValue": total_account_value,
+            "totalAccountValue": float(total_account_value),
             "walletValue": float(total_wallet_value),
-            "unrealizedPnL": float(total_unrealized_pnl),
+            "unrealizedPnL": float(total_pnl),
             "positions": positions,
             "contractWallets": contract_wallets,
             "spotWallets": spot_wallets
         }
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error calculating account value: {str(e)}")
 

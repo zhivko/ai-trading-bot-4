@@ -1,5 +1,6 @@
 import alarm_service
 import os
+import time
 from datetime import datetime
 
 # Fake data for simulation
@@ -8,9 +9,10 @@ timeframe = "15m"
 current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 # Fake alarm data
+alarm_key = f"SIM_{int(time.time())}"
 alarm_data = {
-    "key": f"SIMULATION_{current_time}",
-    "message": f"🧪 **SIMULATION TEST**\nSymbol: {symbol}\nTime: {current_time}\n\nThis is a test of the notification system with images.",
+    "key": alarm_key,
+    "message": f"🧪 **SIMULATION TEST**\nSymbol: {symbol}\nTime: {current_time}\nID: `{alarm_key}`\n\nThis is a test of the notification system with images.",
     "symbol": symbol,
     "timeframe": timeframe
 }

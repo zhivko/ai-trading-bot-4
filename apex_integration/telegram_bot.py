@@ -47,42 +47,63 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text="🚀 Apex Omni Trading Bot Interface Online\n\nCommands:\n/buy [alarm_id] [stop_loss] - Buy BTC-USDT\n/sell [alarm_id] [stop_loss] - Sell BTC-USDT\n\nIf alarm_id is omitted, one will be generated (e.g. buy_1700000000)."
     )
 
+def get_alarm_info(alarm_id):
+    """Lookup alarm details from the shared alarms database"""
+    import json
+    db_path = os.path.join("..", "data", "alarms_db.json")
+    if not os.path.exists(db_path):
+        # Try without parent dir just in case
+        db_path = os.path.join("data", "alarms_db.json")
+
+    if os.path.exists(db_path):
+        try:
+            with open(db_path, 'r') as f:
+                db = json.load(f)
+                return db.get(alarm_id)
+        except: pass
+    return None
+
 async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update):
         return
 
-    # Default alarm_id to timestamp
+    # Default values
     alarm_id = f"buy_{int(time.time())}"
+    symbol = DEFAULT_SYMBOL
     stop_loss = None
 
     if context.args:
-        # Check if first arg looks like an alarm_id or a stop_loss?
-        # User said: /buy {alarm_id} or /sell {alarm_id}
-        # But logically someone might skip alarm_id. 
-        # For simplicity, if args exist:
-        # arg[0] = alarm_id
-        # arg[1] = stop_loss
-        alarm_id = context.args[0]
-        if len(context.args) > 1:
-            stop_loss = context.args[1]
+        # Check if first arg is an alarm_id we know
+        potential_id = context.args[0]
+        alarm_info = get_alarm_info(potential_id)
+        
+        if alarm_info:
+            alarm_id = potential_id
+            symbol = alarm_info.get('symbol', DEFAULT_SYMBOL)
+            # If there's a second arg, it's stop_loss
+            if len(context.args) > 1:
+                stop_loss = context.args[1]
+        else:
+            # If not a known alarm_id, treat args as [alarm_id, stop_loss] manually
+            alarm_id = potential_id 
+            if len(context.args) > 1:
+                stop_loss = context.args[1]
     
-    logger.info(f"Received /buy command. Alarm ID: {alarm_id}, Stop Loss: {stop_loss}")
+    logger.info(f"Received /buy command. Alarm ID: {alarm_id}, Symbol: {symbol}, Stop Loss: {stop_loss}")
     
     try:
-        # Construct the URL
-        url = f"{TRADING_SERVICE_URL}/buy/{DEFAULT_SYMBOL}"
+        # Standardize symbol for URL
+        url = f"{TRADING_SERVICE_URL}/buy/{symbol}"
         
         params = {}
         if stop_loss:
             params['stop_loss'] = stop_loss
 
-        # We can pass params if needed, but for now just the basic call
-        # If headers/auth logic is needed for the local service, add here
         response = requests.post(url, params=params, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
-            message = f"✅ BUY Order Placed!\n\nAlarm ID: {alarm_id}\nStop Loss: {stop_loss}\n\nDetails:\n{data}"
+            message = f"✅ BUY Order Placed!\n\nSymbol: {symbol}\nAlarm ID: {alarm_id}\nStop Loss: {stop_loss}\n\nDetails:\n{json.dumps(data, indent=2)}"
         else:
             message = f"❌ Buy Failed (Status: {response.status_code})\n\nResponse: {response.text}"
             
@@ -96,19 +117,30 @@ async def sell_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update):
         return
 
-    # Default alarm_id to timestamp
+    # Default values
     alarm_id = f"sell_{int(time.time())}"
+    symbol = DEFAULT_SYMBOL
     stop_loss = None
 
     if context.args:
-        alarm_id = context.args[0]
-        if len(context.args) > 1:
-            stop_loss = context.args[1]
+        # Check if first arg is an alarm_id we know
+        potential_id = context.args[0]
+        alarm_info = get_alarm_info(potential_id)
+        
+        if alarm_info:
+            alarm_id = potential_id
+            symbol = alarm_info.get('symbol', DEFAULT_SYMBOL)
+            if len(context.args) > 1:
+                stop_loss = context.args[1]
+        else:
+            alarm_id = potential_id
+            if len(context.args) > 1:
+                stop_loss = context.args[1]
     
-    logger.info(f"Received /sell command. Alarm ID: {alarm_id}, Stop Loss: {stop_loss}")
+    logger.info(f"Received /sell command. Alarm ID: {alarm_id}, Symbol: {symbol}, Stop Loss: {stop_loss}")
     
     try:
-        url = f"{TRADING_SERVICE_URL}/sell/{DEFAULT_SYMBOL}"
+        url = f"{TRADING_SERVICE_URL}/sell/{symbol}"
         
         params = {}
         if stop_loss:
@@ -118,7 +150,7 @@ async def sell_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if response.status_code == 200:
             data = response.json()
-            message = f"✅ SELL Order Placed!\n\nAlarm ID: {alarm_id}\nStop Loss: {stop_loss}\n\nDetails:\n{data}"
+            message = f"✅ SELL Order Placed!\n\nSymbol: {symbol}\nAlarm ID: {alarm_id}\nStop Loss: {stop_loss}\n\nDetails:\n{json.dumps(data, indent=2)}"
         else:
             message = f"❌ Sell Failed (Status: {response.status_code})\n\nResponse: {response.text}"
             

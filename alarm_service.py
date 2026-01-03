@@ -16,6 +16,34 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Cache to prevent spamming the same alarm
 ALARM_CACHE = {}
+ALARM_DB_PATH = os.path.join("data", "alarms_db.json")
+
+def save_alarm_to_disk(alarm_data):
+    """Save alarm to a simple JSON file for the telegram bot to read"""
+    import json
+    try:
+        db = {}
+        if os.path.exists(ALARM_DB_PATH):
+            with open(ALARM_DB_PATH, 'r') as f:
+                db = json.load(f)
+        
+        # Add or update
+        db[alarm_data['key']] = {
+            "symbol": alarm_data['symbol'],
+            "timeframe": alarm_data['timeframe'],
+            "time": datetime.now().isoformat()
+        }
+        
+        # Keep only last 100
+        if len(db) > 100:
+            # Sort by time and keep newest
+            sorted_keys = sorted(db.keys(), key=lambda k: db[k].get('time', ''), reverse=True)
+            db = {k: db[k] for k in sorted_keys[:100]}
+
+        with open(ALARM_DB_PATH, 'w') as f:
+            json.dump(db, f, indent=2)
+    except Exception as e:
+        print(f"Error saving alarm to disk: {e}")
 
 def get_chat_id_if_missing():
     """
@@ -84,7 +112,7 @@ def check_signals(filepath, symbol, timeframe, nn_threshold=30):
             emoji = "🟢" if is_buy else "🔴"
             conf_str = f" ({confidence:.1f}%)" if confidence else ""
             
-            msg = f"{emoji} **{symbol} {timeframe}**\nSignal: {type_name} {side}{conf_str}\nTime: {last_time}"
+            msg = f"{emoji} **{symbol} {timeframe}**\nSignal: {type_name} {side}{conf_str}\nTime: {last_time}\nID: `{alarm_key}`"
             
             alarms_found.append({
                 "key": alarm_key,
@@ -142,31 +170,50 @@ def send_telegram_alert(alarm_data, filepath):
              filepath, alarm_data['symbol'], alarm_data['timeframe']
         )
         
+        media = []
         files = {}
-        # Send as an album (MediaGroup) if both exist, or individual photos
-        # Creating a media group is slightly complex with requests, simpler to send Text -> Image 1 -> Image 2
         
-        # Send Text First
-        url_msg = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        resp = requests.post(url_msg, data={"chat_id": chat_id, "text": alarm_data['message'], "parse_mode": "Markdown"})
-        print(f"Text Response: {resp.status_code} - {resp.text}")
-        
-        # Send Chart
+        # Add Chart to Media Group
         if chart_img_path and os.path.exists(chart_img_path):
-            with open(chart_img_path, 'rb') as f:
-                url_photo = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-                resp = requests.post(url_photo, data={"chat_id": chat_id}, files={"photo": f})
-                print(f"Photo Response: {resp.status_code} - {resp.text}")
-            # Clean up
+            media.append({
+                "type": "photo",
+                "media": "attach://chart",
+                "caption": alarm_data['message'],
+                "parse_mode": "Markdown"
+            })
+            files["chart"] = open(chart_img_path, 'rb')
+        
+        # Add VP to Media Group
+        if vp_img_path and os.path.exists(vp_img_path):
+            media.append({
+                "type": "photo",
+                "media": "attach://vp"
+            })
+            files["vp"] = open(vp_img_path, 'rb')
+            
+        # Persist alarm for the telegram bot to lookup
+        save_alarm_to_disk(alarm_data)
+
+        if media:
+            # Send as Media Group (Album)
+            url_media = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMediaGroup"
+            import json
+            resp = requests.post(url_media, data={"chat_id": chat_id, "media": json.dumps(media)}, files=files)
+            print(f"Telegram MediaGroup Response: {resp.status_code} - {resp.text}")
+        else:
+            # Fallback to Text only if images failed
+            url_msg = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            resp = requests.post(url_msg, data={"chat_id": chat_id, "text": alarm_data['message'], "parse_mode": "Markdown"})
+            print(f"Telegram Text Fallback Response: {resp.status_code} - {resp.text}")
+
+        # Clean up files and close handles
+        for f_handle in files.values():
+            f_handle.close()
+            
+        if chart_img_path and os.path.exists(chart_img_path):
             try: os.remove(chart_img_path)
             except: pass
-
-        # Send VP
         if vp_img_path and os.path.exists(vp_img_path):
-            with open(vp_img_path, 'rb') as f:
-                url_photo = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-                requests.post(url_photo, data={"chat_id": chat_id, "caption": "Volume Profile & Structure"}, files={"photo": f})
-             # Clean up
             try: os.remove(vp_img_path)
             except: pass
 
