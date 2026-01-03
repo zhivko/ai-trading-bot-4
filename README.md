@@ -145,6 +145,52 @@ The model successfully identifies both peaks (SELL) and troughs (BUY) using the 
 ### 🖱️ Sidebar Marker Interaction
 You can now click on any neural network marker to see a detailed trade setup in the sidebar, including a **Mini Volume Profile** focused on the local accumulation zone.
 
+---
+
+## 🔗 ApexPro Exchange Integration
+
+The bot integrates directly with **Apex Omni** (decentralized exchange) for automated trading.
+
+### 1. Configuration
+The trading service is launched automatically by `app.py`. It requires `apexomni` (installed) and API credentials in `.env`:
+```bash
+APEXPRO_API_KEY=your_key
+APEXPRO_API_SECRET=your_secret
+APEXPRO_API_PASSPHRASE=your_passphrase
+```
+
+### 2. Architecture
+- **Service**: Runs as a subprocess (`trading_service.py`) managed by the main Flask app.
+- **API**: Locally exposes endpoints at `http://localhost:8000` for `BUY`, `SELL`, and `POSITIONS` management.
+- **Reliability**: Uses `apexomni` official package (v3.1.4+) for stable WebSocket and HTTP connectivity.
+
+---
+
+## 🤖 Telegram Bot Integration
+
+Control your bot remotely via Telegram.
+
+### 1. Setup
+Add your bot credentials to `.env`:
+```bash
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
+```
+
+### 2. Commands
+- `/start` - Check bot status and authorization.
+- `/buy [optional:alarm_id]` - Execute a Market BUY order on ApexPro.
+- `/sell [optional:alarm_id]` - Execute a Market SELL order on ApexPro.
+
+### 3. Smart Monitoring
+The bot actively watches your open positions:
+- **Entry Alerts**: Instant notification when a new position is detected.
+- **Trailing Stop**: Automatically updates Stop Loss as price moves in your favor (2% trail).
+- **Exit Alerts**: Notifies you when a trade is closed.
+
+---
+
+
 ````carousel
 ![Buy Marker Sidebar Proof](assets/buy_sidebar.png)
 <!-- slide -->

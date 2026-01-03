@@ -1,3 +1,4 @@
+# .venv\Scripts\pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 --force-reinstall --no-cache-dir
 --extra-index-url https://download.pytorch.org/whl/cu130/
 
 # Requirements for multi_stochastic_quad_rotation.py and Flask Web Monitor
