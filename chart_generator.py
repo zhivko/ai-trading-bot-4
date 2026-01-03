@@ -822,6 +822,7 @@ def generate_chart_data(filepath, symbol, timeframe, num_candles=100, start_date
             y=chart_df['volume'].tolist(),
             name='Volume',
             marker_color=colors,
+            marker=dict(line=dict(width=0)),
             showlegend=False
         ),
         row=2, col=1
