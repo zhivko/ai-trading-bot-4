@@ -210,13 +210,20 @@ async def trades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             open_time = trade.get('open_time', 'Unknown')
             
             side_emoji = "🟢" if side == 'LONG' else "🔴"
+            pnl_emoji = "🟢" if pnl_val >= 0 else "🔴"
+            
+            if side == 'LONG':
+                best = trade.get('highest_price', 0)
+                best_label = "Highest"
+            else:
+                best = trade.get('lowest_price', 0)
+                best_label = "Lowest"
             
             msg += f"{side_emoji} **{symbol}** ({side})\n"
             msg += f"• ⏱ Opened: {open_time}\n"
             msg += f"• 🚪 Entry: {entry:.2f}\n"
             msg += f"• 📍 Current: {current:.2f}\n"
             msg += f"• 💰 PNL: {pnl_emoji} **{pnl_pct:.2f}%** (${pnl_val:.2f})\n"
-            msg += f"• {best_label}: {best:.2f}\n"
             msg += f"• {best_label}: {best:.2f}\n"
             msg += f"• 🛑 Active SL: {sl:.2f}\n"
             
