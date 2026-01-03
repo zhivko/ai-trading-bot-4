@@ -31,6 +31,9 @@ def save_alarm_to_disk(alarm_data):
         db[alarm_data['key']] = {
             "symbol": alarm_data['symbol'],
             "timeframe": alarm_data['timeframe'],
+            "is_buy": alarm_data.get('is_buy', True),
+            "stop_loss": alarm_data.get('stop_loss'),
+            "take_profit": alarm_data.get('take_profit'),
             "time": datetime.now().isoformat()
         }
         
@@ -71,9 +74,11 @@ def get_chat_id_if_missing():
     
     return None
 
-def check_signals(filepath, symbol, timeframe, nn_threshold=30):
+import backtest_strategy_3_lvn_acceleration as strat3
+
+def check_signals_for_file(filepath, symbol, timeframe, nn_threshold=30):
     """
-    Checks for trading signals in the latest data.
+    Checks the given file for trading signals.
     Returns a list of dicts describing detected alarms.
     """
     if not os.path.exists(filepath):
@@ -97,7 +102,8 @@ def check_signals(filepath, symbol, timeframe, nn_threshold=30):
         # Check latest candle (and maybe previous one to be safe/unsure about closing time)
         # We really care about the LAST COMPLETED candle usually, or the current forming one.
         # Since 'update_data_files' removes the incomplete candle, the last row IS the last completed candle.
-        last_candle = df.iloc[-1]
+        last_candle_idx = len(df) - 1
+        last_candle = df.iloc[last_candle_idx]
         last_time = df.index[-1]
         
         alarms_found = []
@@ -105,8 +111,21 @@ def check_signals(filepath, symbol, timeframe, nn_threshold=30):
         # Helper to construct alarm object
         def add_alarm(type_name, confidence=None, is_buy=True):
             # Create a unique key for this alarm to avoid duplicates: Symbol_Time_Type
-            alarm_key = f"{symbol}_{timeframe}_{last_time}_{type_name}"
+            # FIXED: Replace spaces with hyphens in both time and type name
+            alarm_key = f"{symbol}_{timeframe}_{str(last_time).replace(' ', '-')}_{type_name.replace(' ', '-')}"
             
+            # --- EXTRACT PRECISE TP/SL FROM STRATEGY ---
+            # We temporarily ensure the side is set in the row for get_trade_setup
+            df.loc[df.index[last_candle_idx], 'nn_sell_alarm'] = not is_buy
+            df.loc[df.index[last_candle_idx], 'nn_buy_alarm'] = is_buy
+            
+            # Pass the full df to get_trade_setup so it has history for ATR/VP
+            setup = strat3.get_trade_setup(df, last_candle_idx)
+            stop_loss = setup.get('stop_loss')
+            tp_list = setup.get('take_profit_candidates', [])
+            take_profit = tp_list[0] if tp_list else None
+            # -------------------------------------------
+
             # Message
             side = "BUY" if is_buy else "SELL"
             emoji = "🟢" if is_buy else "🔴"
@@ -118,7 +137,10 @@ def check_signals(filepath, symbol, timeframe, nn_threshold=30):
                 "key": alarm_key,
                 "message": msg,
                 "symbol": symbol,
-                "timeframe": timeframe
+                "timeframe": timeframe,
+                "is_buy": is_buy,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit
             })
 
         # Check for Quad Rotation Alarm
@@ -167,7 +189,8 @@ def send_telegram_alert(alarm_data, filepath):
             filepath, alarm_data['symbol'], alarm_data['timeframe'], num_candles=80
         )
         vp_img_path = screenshot_generator.generate_mini_vp_image(
-             filepath, alarm_data['symbol'], alarm_data['timeframe']
+             filepath, alarm_data['symbol'], alarm_data['timeframe'], 
+             is_sell=not alarm_data.get('is_buy', True)
         )
         
         media = []

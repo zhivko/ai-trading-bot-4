@@ -271,8 +271,8 @@ def calculate_account_value() -> Dict[str, Any]:
                 if entry_price > 0:
                     total_pnl += size * (entry_price - current_price)
 
-        # TOTAL EQUITY = Cash Balances + Notional Value (Longs) + P&L
-        total_account_value = total_wallet_value + total_notional_value
+        # TOTAL EQUITY = Total Wallet Cash + Unrealized P&L
+        total_account_value = total_wallet_value + total_pnl
 
         return {
             "totalAccountValue": float(total_account_value),
@@ -340,8 +340,8 @@ async def get_account():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/buy/{symbol}")
-async def buy_position(symbol: str, leverage: float = 5.0, amount_percent: float = None, amount_usd: float = None):
+@app.post("/buy/{symbol}", response_model=TradeResponse)
+async def buy_position(symbol: str, leverage: float = 5.0, amount_percent: float = None, amount_usd: float = None, stop_loss: float = None, take_profit: float = None):
     """
     Place LONG position with complete risk management
 
@@ -416,8 +416,15 @@ async def buy_position(symbol: str, leverage: float = 5.0, amount_percent: float
         stop_loss_distance_pct = risk_pct / leverage  # Stop distance = 5% risk / leverage
         take_profit_distance_pct = stop_loss_distance_pct * 3  # 1:3 risk ratio = 3x stop distance
 
-        stop_loss_price = decimal.Decimal(rounded_limit_price) * decimal.Decimal(str(1 - stop_loss_distance_pct))
-        take_profit_price = decimal.Decimal(rounded_limit_price) * decimal.Decimal(str(1 + take_profit_distance_pct))
+        if stop_loss is not None:
+             stop_loss_price = decimal.Decimal(str(stop_loss))
+        else:
+             stop_loss_price = decimal.Decimal(rounded_limit_price) * decimal.Decimal(str(1 - stop_loss_distance_pct))
+
+        if take_profit is not None:
+             take_profit_price = decimal.Decimal(str(take_profit))
+        else:
+             take_profit_price = decimal.Decimal(rounded_limit_price) * decimal.Decimal(str(1 + take_profit_distance_pct))
 
         # Round stop loss and take profit prices to tick size and convert to clean strings for Apex Pro
         rounded_stop_loss_price_decimal = round_size(str(stop_loss_price), symbol_data.get('tickSize'))
@@ -490,7 +497,7 @@ async def buy_position(symbol: str, leverage: float = 5.0, amount_percent: float
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/sell/{symbol}")
-async def sell_position(symbol: str, leverage: float = 5.0, amount_percent: float = None, amount_usd: float = None):
+async def sell_position(symbol: str, leverage: float = 5.0, amount_percent: float = None, amount_usd: float = None, stop_loss: float = None, take_profit: float = None):
     """
     Place SHORT position with complete risk management
 
@@ -561,8 +568,15 @@ async def sell_position(symbol: str, leverage: float = 5.0, amount_percent: floa
         stop_loss_distance_pct = risk_pct / leverage  # Stop distance = 5% risk / leverage
         take_profit_distance_pct = stop_loss_distance_pct * 3  # 1:3 risk ratio = 3x stop distance
 
-        stop_loss_price = decimal.Decimal(rounded_limit_price) * decimal.Decimal(str(1 + stop_loss_distance_pct))  # Above entry for SHORT
-        take_profit_price = decimal.Decimal(rounded_limit_price) * decimal.Decimal(str(1 - take_profit_distance_pct))  # Below entry for SHORT
+        if stop_loss is not None:
+             stop_loss_price = decimal.Decimal(str(stop_loss))
+        else:
+             stop_loss_price = decimal.Decimal(rounded_limit_price) * decimal.Decimal(str(1 + stop_loss_distance_pct))  # Above entry for SHORT
+
+        if take_profit is not None:
+             take_profit_price = decimal.Decimal(str(take_profit))
+        else:
+             take_profit_price = decimal.Decimal(rounded_limit_price) * decimal.Decimal(str(1 - take_profit_distance_pct))  # Below entry for SHORT
 
         # Round stop loss and take profit prices to tick size and convert to clean strings for Apex Pro
         rounded_stop_loss_price_decimal = round_size(str(stop_loss_price), symbol_data.get('tickSize'))

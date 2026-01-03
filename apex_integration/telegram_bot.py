@@ -48,19 +48,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def get_alarm_info(alarm_id):
-    """Lookup alarm details from the shared alarms database"""
+    """Lookup alarm details in the local JSON database."""
     import json
-    db_path = os.path.join("..", "data", "alarms_db.json")
-    if not os.path.exists(db_path):
-        # Try without parent dir just in case
-        db_path = os.path.join("data", "alarms_db.json")
-
-    if os.path.exists(db_path):
-        try:
+    try:
+        db_path = os.path.join("..", "data", "alarms_db.json")
+        if os.path.exists(db_path):
             with open(db_path, 'r') as f:
                 db = json.load(f)
                 return db.get(alarm_id)
-        except: pass
+    except Exception as e:
+        logger.error(f"Error reading alarms_db.json: {e}")
     return None
 
 async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -71,39 +68,48 @@ async def buy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     alarm_id = f"buy_{int(time.time())}"
     symbol = DEFAULT_SYMBOL
     stop_loss = None
+    take_profit = None
 
     if context.args:
-        # Check if first arg is an alarm_id we know
-        potential_id = context.args[0]
-        alarm_info = get_alarm_info(potential_id)
+        # Intelligently handle ID potentially containing spaces
+        full_potential_id = " ".join(context.args)
         
+        # Check joined ID
+        alarm_info = get_alarm_info(full_potential_id)
         if alarm_info:
-            alarm_id = potential_id
+            alarm_id = full_potential_id
             symbol = alarm_info.get('symbol', DEFAULT_SYMBOL)
-            # If there's a second arg, it's stop_loss
-            if len(context.args) > 1:
-                stop_loss = context.args[1]
+            # Use precise SL/TP from strategy if available
+            stop_loss = alarm_info.get('stop_loss')
+            take_profit = alarm_info.get('take_profit')
         else:
-            # If not a known alarm_id, treat args as [alarm_id, stop_loss] manually
-            alarm_id = potential_id 
-            if len(context.args) > 1:
-                stop_loss = context.args[1]
+            # Check if joining with hyphens 
+            hyphenated_id = full_potential_id.replace(' ', '-')
+            alarm_info = get_alarm_info(hyphenated_id)
+            if alarm_info:
+                alarm_id = hyphenated_id
+                symbol = alarm_info.get('symbol', DEFAULT_SYMBOL)
+                stop_loss = alarm_info.get('stop_loss')
+                take_profit = alarm_info.get('take_profit')
+            else:
+                alarm_id = context.args[0]
+                if len(context.args) > 1:
+                    stop_loss = context.args[1]
     
-    logger.info(f"Received /buy command. Alarm ID: {alarm_id}, Symbol: {symbol}, Stop Loss: {stop_loss}")
+    logger.info(f"Received /buy command. Alarm ID: {alarm_id}, Symbol: {symbol}, SL: {stop_loss}, TP: {take_profit}")
     
     try:
-        # Standardize symbol for URL
         url = f"{TRADING_SERVICE_URL}/buy/{symbol}"
         
         params = {}
-        if stop_loss:
-            params['stop_loss'] = stop_loss
+        if stop_loss: params['stop_loss'] = stop_loss
+        if take_profit: params['take_profit'] = take_profit
 
         response = requests.post(url, params=params, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
-            message = f"✅ BUY Order Placed!\n\nSymbol: {symbol}\nAlarm ID: {alarm_id}\nStop Loss: {stop_loss}\n\nDetails:\n{json.dumps(data, indent=2)}"
+            message = f"✅ BUY Order Placed!\n\nSymbol: {symbol}\nAlarm ID: {alarm_id}\n\nDetails:\n{json.dumps(data, indent=2)}"
         else:
             message = f"❌ Buy Failed (Status: {response.status_code})\n\nResponse: {response.text}"
             
@@ -121,36 +127,48 @@ async def sell_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     alarm_id = f"sell_{int(time.time())}"
     symbol = DEFAULT_SYMBOL
     stop_loss = None
+    take_profit = None
 
     if context.args:
-        # Check if first arg is an alarm_id we know
-        potential_id = context.args[0]
-        alarm_info = get_alarm_info(potential_id)
+        # Intelligently handle ID potentially containing spaces
+        full_potential_id = " ".join(context.args)
         
+        # Check joined ID
+        alarm_info = get_alarm_info(full_potential_id)
         if alarm_info:
-            alarm_id = potential_id
+            alarm_id = full_potential_id
             symbol = alarm_info.get('symbol', DEFAULT_SYMBOL)
-            if len(context.args) > 1:
-                stop_loss = context.args[1]
+            # Use precise SL/TP from strategy
+            stop_loss = alarm_info.get('stop_loss')
+            take_profit = alarm_info.get('take_profit')
         else:
-            alarm_id = potential_id
-            if len(context.args) > 1:
-                stop_loss = context.args[1]
+            # Check if joining with hyphens 
+            hyphenated_id = full_potential_id.replace(' ', '-')
+            alarm_info = get_alarm_info(hyphenated_id)
+            if alarm_info:
+                alarm_id = hyphenated_id
+                symbol = alarm_info.get('symbol', DEFAULT_SYMBOL)
+                stop_loss = alarm_info.get('stop_loss')
+                take_profit = alarm_info.get('take_profit')
+            else:
+                alarm_id = context.args[0]
+                if len(context.args) > 1:
+                    stop_loss = context.args[1]
     
-    logger.info(f"Received /sell command. Alarm ID: {alarm_id}, Symbol: {symbol}, Stop Loss: {stop_loss}")
+    logger.info(f"Received /sell command. Alarm ID: {alarm_id}, Symbol: {symbol}, SL: {stop_loss}, TP: {take_profit}")
     
     try:
         url = f"{TRADING_SERVICE_URL}/sell/{symbol}"
         
         params = {}
-        if stop_loss:
-            params['stop_loss'] = stop_loss
+        if stop_loss: params['stop_loss'] = stop_loss
+        if take_profit: params['take_profit'] = take_profit
 
         response = requests.post(url, params=params, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
-            message = f"✅ SELL Order Placed!\n\nSymbol: {symbol}\nAlarm ID: {alarm_id}\nStop Loss: {stop_loss}\n\nDetails:\n{json.dumps(data, indent=2)}"
+            message = f"✅ SELL Order Placed!\n\nSymbol: {symbol}\nAlarm ID: {alarm_id}\n\nDetails:\n{json.dumps(data, indent=2)}"
         else:
             message = f"❌ Sell Failed (Status: {response.status_code})\n\nResponse: {response.text}"
             

@@ -51,27 +51,36 @@ def generate_chart_image(filepath, symbol, timeframe, num_candles=100):
         traceback.print_exc()
         return None
 
-def generate_mini_vp_image(filepath, symbol, timeframe):
+def generate_mini_vp_image(filepath, symbol, timeframe, is_sell=None):
     """
-    Generates a PNG image of the 'Mini Volume Profile' (sidebar view).
+    Generate a mini volume profile chart for Telegram notifications.
+    Includes GMM distribution and TP/SL levels.
     """
+    if not os.path.exists(filepath):
+        print(f"File not found: {filepath}")
+        return None
+
     try:
-        # Load and process data to get the VP setup
+        # Load and process data
         df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
-        # Process recent data for NN/Stoch to ensure strat3 gets valid context
-        buffer = 500
-        if len(df) > buffer:
-            subset_df = df.iloc[-buffer:].copy()
-        else:
-            subset_df = df.copy()
-            
-        # Identify Patterns (Prerequisite for Strat 3 info if any)
-        from chart_generator import identify_nn_patterns
+        # Apply CET+1 Timezone shift
+        df.index = df.index + pd.Timedelta(hours=1)
+        
+        # We only need the recent fragment for the VP calculation
+        subset_df = df.tail(300).copy()
         subset_df = identify_nn_patterns(subset_df)
         
         # Get Strategy 3 setup data (which includes VP)
-        # This will calculate VP on the fly for the latest candle
-        setup_data = strat3.get_trade_setup(subset_df, len(subset_df)-1)
+        # Pass the explicit side if provided, otherwise let it detect from NN
+        last_idx = len(subset_df) - 1
+        
+        # If is_sell is explicitly provided (True/False), force it in the df temporarily
+        # so get_trade_setup picks it up.
+        if is_sell is not None:
+             subset_df.loc[subset_df.index[last_idx], 'nn_sell_alarm'] = bool(is_sell)
+             subset_df.loc[subset_df.index[last_idx], 'nn_buy_alarm'] = not bool(is_sell)
+
+        setup_data = strat3.get_trade_setup(subset_df, last_idx)
         
         if not setup_data or 'vp_data' not in setup_data or not setup_data['vp_data']:
             print("No VP data found in setup")
