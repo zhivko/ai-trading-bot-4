@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from chart_generator import identify_hybrid_signals
+from chart_generator import identify_quad_rotation_alarms
+
 import importlib
 from concurrent.futures import ThreadPoolExecutor
 
@@ -200,13 +201,19 @@ def compare_strategies():
     # Process dataset (last 100 days)
     df_slice = df.tail(10000).copy()
     print(f"Processing {len(df_slice)} candles for Unified Model Inference...")
-    df_processed = identify_nn_patterns(df_slice, nn_threshold=0.30)
     
-    # Filter for entries
+    # Use raw NN signals (they already incorporate pattern detection)
+    df_processed = identify_nn_patterns(df_slice, nn_threshold=30)
+    
+    # Extract signals
     buy_indices = np.where(df_processed['nn_buy_alarm'])[0]
     sell_indices = np.where(df_processed['nn_sell_alarm'])[0]
     
+    print(f"\n{'='*80}")
+    print(f"Signal Type: Raw NN (High-Confidence Patterns)")
     print(f"Found {len(buy_indices)} BUY Signals and {len(sell_indices)} SELL Signals")
+    print(f"{'='*80}\n")
+
     
     # Base strategies to compare
     base_strategies = [

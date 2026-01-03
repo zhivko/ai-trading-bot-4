@@ -785,6 +785,7 @@
                         paper_bgcolor: 'rgba(0,0,0,0)',
                         plot_bgcolor: 'rgba(0,0,0,0)',
                         showlegend: false,
+                        bargap: 0, // No gaps between bars to avoid "empty bin" look
                         xaxis: { showgrid: false, showticklabels: false, zeroline: false },
                         yaxis: { showgrid: false, showticklabels: true, tickfont: { size: 9, color: '#888' } },
                         shapes: [
@@ -809,14 +810,13 @@
                         ]
                     };
 
-                    // Add TP Lines
-                    if (data.take_profit_candidates) {
-                        data.take_profit_candidates.forEach(tp => {
-                            layout.shapes.push({
-                                type: 'line', x0: 0, x1: 1, xref: 'paper',
-                                y0: tp, y1: tp,
-                                line: { color: 'lime', width: 1, dash: 'dot', opacity: 0.5 }
-                            });
+                    // Add Primary TP Line (Strict Double Top Target)
+                    if (data.take_profit_candidates && data.take_profit_candidates.length > 0) {
+                        const tp = data.take_profit_candidates[0]; // Logic now guarantees this is the single best target
+                        layout.shapes.push({
+                            type: 'line', x0: 0, x1: 1, xref: 'paper',
+                            y0: tp, y1: tp,
+                            line: { color: '#39ff14', width: 2, dash: 'solid' } // Solid neon green for high conviction
                         });
                     }
 

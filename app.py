@@ -152,7 +152,11 @@ def get_chart_data(symbol, timeframe):
         from flask import Response
         return Response(chart_json_str, mimetype='application/json')
     except Exception as e:
+        import traceback
+        print(f"ERROR in /api/chart/{symbol}/{timeframe}:")
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/metadata/<symbol>/<timeframe>')
 def get_metadata(symbol, timeframe):

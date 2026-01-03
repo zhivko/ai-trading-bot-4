@@ -149,16 +149,111 @@ def execute_trade(df, entry_idx, current_balance, position_size_pct=0.5, precise
     }
 
 def get_trade_setup(df, entry_idx):
-    """Minimal setup for preview (can be expanded later)"""
+    """Generate trade setup preview with volume profile data"""
     entry_price = df['close'].iloc[entry_idx]
     entry_time = df.index[entry_idx]
     is_sell = bool(df['nn_sell_alarm'].iloc[entry_idx]) if 'nn_sell_alarm' in df.columns else False
     
+    # Calculate ATR for stop loss
+    start_atr = max(0, entry_idx - 20)
+    atr_window = df.iloc[start_atr:entry_idx+1].copy()
+    atr_series = calculate_atr(atr_window, period=14)
+    current_atr = atr_series.iloc[-1]
+    
+    if np.isnan(current_atr) or current_atr == 0:
+        current_atr = entry_price * 0.01
+    
+    atr_multiplier = 4.5
+    stop_distance = current_atr * atr_multiplier
+    stop_loss = entry_price + stop_distance if is_sell else entry_price - stop_distance
+    stop_loss_pct = abs((stop_loss - entry_price) / entry_price * 100)
+    
+    # Calculate Volume Profile
+    # Reverted to 80 bins as requested, enabled verbose for debugging
+    vp = calculate_volume_profile(df, start_idx=max(0, entry_idx-200), end_idx=entry_idx, precise=True, num_bins=80, verbose=True)
+    
+    # Get NN confidence if available
+    nn_confidence = None
+    if is_sell and 'nn_sell_confidence' in df.columns:
+        nn_confidence = df['nn_sell_confidence'].iloc[entry_idx]
+    elif 'nn_buy_confidence' in df.columns:
+        nn_confidence = df['nn_buy_confidence'].iloc[entry_idx]
+    
+    # Determine take profit targets (Double Distribution Logic)
+    take_profit_candidates = []
+    if vp:
+        # Helper to get volume for a price
+        def get_vol(p):
+            idx = np.abs(vp['bin_centers'] - p).argmin()
+            return vp['profile'].iloc[idx]
+
+        if is_sell:
+            # GMM 2-Peak Detection
+            from volume_profile import find_dual_distribution_peaks
+            gmm_peaks = find_dual_distribution_peaks(vp['profile'], vp['bin_centers'])
+            
+            # Find the peak that is significantly BELOW entry
+            targets_below = [p for p in gmm_peaks if p < entry_price * 0.995]
+            
+            if targets_below:
+                # If multiple peaks below (unlikely with n=2), take the lowest one
+                take_profit_candidates = [min(targets_below)]
+            else:
+                # Fallback: if GMM didn't find a lower peak, check standard clusters
+                peaks_below = [p for p in vp['cluster_prices'] if p < entry_price * 0.995]
+                if peaks_below:
+                     take_profit_candidates = [sorted(peaks_below, key=get_vol, reverse=True)[0]]
+                else:
+                    take_profit_candidates = [entry_price * 0.96]
+
+        else: # BUY
+            # GMM 2-Peak Detection
+            from volume_profile import find_dual_distribution_peaks
+            gmm_peaks = find_dual_distribution_peaks(vp['profile'], vp['bin_centers'])
+            
+            # Find the peak that is significantly ABOVE entry
+            targets_above = [p for p in gmm_peaks if p > entry_price * 1.005]
+            
+            if targets_above:
+                # If multiple peaks above, take the highest one
+                take_profit_candidates = [max(targets_above)]
+            else:
+                # Fallback
+                peaks_above = [p for p in vp['cluster_prices'] if p > entry_price * 1.005]
+                if peaks_above:
+                    take_profit_candidates = [sorted(peaks_above, key=get_vol, reverse=True)[0]]
+                else:
+                    take_profit_candidates = [entry_price * 1.04]
+    
+    # Prepare volume profile data for mini-chart
+    vp_data = None
+    if vp:
+        vp_data = {
+            'prices': vp['bin_centers'].tolist(),  # Use bin_centers for X-axis prices
+            'volumes': vp['profile'].values.tolist(),
+            'poc': vp['poc_price'],
+            'vah': vp['vah'],
+            'val': vp['val']
+        }
+        
+        # Use GMM PDF for the "orange line" to show the idealized 2-peak fit
+        try:
+            from volume_profile import get_dual_distribution_pdf
+            pdf_curve = get_dual_distribution_pdf(vp['profile'], vp['bin_centers'])
+            if pdf_curve is not None:
+                 vp_data['volumes_smooth'] = pdf_curve.tolist()
+        except ImportError:
+             pass
+
     return {
         'timestamp': entry_time,
         'entry_price': entry_price,
-        'stop_loss': entry_price * (1.02 if is_sell else 0.98),
+        'stop_loss': stop_loss,
+        'stop_loss_pct': stop_loss_pct,
         'is_sell': is_sell,
-        'take_profit_candidates': [entry_price * (0.95 if is_sell else 1.05)],
-        'description': f"Hybrid Strategy 3 | {'SELL' if is_sell else 'BUY'}"
+        'take_profit_candidates': take_profit_candidates,
+        'nn_confidence': nn_confidence,
+        'vp_data': vp_data,
+        'description': f"Hybrid Strategy 3: LVN Acceleration | {'SELL' if is_sell else 'BUY'} Signal"
     }
+

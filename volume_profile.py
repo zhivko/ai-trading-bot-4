@@ -437,6 +437,97 @@ def get_volume_percentile(price: float, vp_data: Dict) -> float:
     return percentile
 
 
+def find_dual_distribution_peaks(volume_profile: pd.Series, bin_centers: np.ndarray) -> List[float]:
+    """
+    Fit a Gaussian Mixture Model with 2 components to find the two major distribution centers.
+    Returns the prices of the two peaks (means).
+    """
+    try:
+        from sklearn.mixture import GaussianMixture
+        
+        # Filter out completely empty profiles
+        if volume_profile.sum() == 0:
+            return []
+        
+        # Prepare data for GMM: weighted by volume
+        # We need to reconstruct the dataset from the histogram
+        prices_weighted = []
+        # Downsample for performance if needed, but 1000 samples is fast
+        total_vol = volume_profile.sum()
+        target_samples = 1000
+        
+        for i, vol in enumerate(volume_profile.values):
+            if vol > 0:
+                # Proportional number of samples
+                count = int((vol / total_vol) * target_samples)
+                if count > 0:
+                    prices_weighted.extend([bin_centers[i]] * count)
+        
+        if len(prices_weighted) < 10:
+            return []
+        
+        X = np.array(prices_weighted).reshape(-1, 1)
+        
+        # Force 2 components
+        gmm = GaussianMixture(n_components=2, covariance_type='full', random_state=42, max_iter=100)
+        gmm.fit(X)
+        
+        # Get the means (peaks) and flatten
+        peaks = sorted(gmm.means_.flatten())
+        return peaks
+        
+    except Exception as e:
+        print(f"GMM Error: {e}")
+        return []
+
+def get_dual_distribution_pdf(volume_profile: pd.Series, bin_centers: np.ndarray) -> np.ndarray:
+    """
+    Fit a GMM with 2 components and return the probability density (PDF) values 
+    evaluated at bin_centers. This creates a smooth "Two Peak" curve.
+    """
+    try:
+        from sklearn.mixture import GaussianMixture
+        
+        if volume_profile.sum() == 0:
+            return np.zeros_like(bin_centers)
+            
+        prices_weighted = []
+        total_vol = volume_profile.sum()
+        target_samples = 1000
+        
+        for i, vol in enumerate(volume_profile.values):
+            if vol > 0:
+                count = int((vol / total_vol) * target_samples)
+                if count > 0:
+                    prices_weighted.extend([bin_centers[i]] * count)
+        
+        if len(prices_weighted) < 10:
+            return np.zeros_like(bin_centers)
+        
+        X = np.array(prices_weighted).reshape(-1, 1)
+        
+        # Fit GMM
+        gmm = GaussianMixture(n_components=2, covariance_type='full', random_state=42, max_iter=100)
+        gmm.fit(X)
+        
+        # Evaluate PDF at bin_centers
+        logprob = gmm.score_samples(bin_centers.reshape(-1, 1))
+        pdf = np.exp(logprob)
+        
+        # Scale PDF to match volume profile height for visualization
+        # We scale so the max of PDF matches max of actual volume profile
+        if pdf.max() > 0:
+            scale_factor = volume_profile.max() / pdf.max()
+            pdf_scaled = pdf * scale_factor
+            return pdf_scaled
+            
+        return np.zeros_like(bin_centers)
+        
+    except Exception as e:
+        print(f"GMM PDF Error: {e}")
+        return np.zeros_like(bin_centers)
+
+
 # Example usage and testing
 if __name__ == '__main__':
     # Test with sample data
