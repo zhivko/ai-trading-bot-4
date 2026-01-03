@@ -276,7 +276,7 @@ def check_and_notify_all():
                     continue
 
                 filepath = os.path.join(data_dir, filename)
-                alarms = check_signals(filepath, symbol, timeframe)
+                alarms = check_signals_for_file(filepath, symbol, timeframe)
                 
                 for alarm in alarms:
                     send_telegram_alert(alarm, filepath)
