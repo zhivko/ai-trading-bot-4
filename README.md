@@ -135,18 +135,18 @@ We have successfully achieved the **5% Drawdown Target** by scaling all strategi
 > **Strategy 3 Optimized (v2)** is our current "Capital Efficiency" champion, generating **37.34% profit** in 100 days—beating pure trend strategies while remaining within our strict **5% drawdown** risk profile.
 
 #### High-Yield Performance Visualization
-![High Yield Comparison Final](/c:/git/ai-trading-bot-4/assets/high_yield_comparison.png)
+![High Yield Comparison Final](assets/high_yield_comparison.png)
 
 ### 📈 Verification: Unified Model Inference
 The model successfully identifies both peaks (SELL) and troughs (BUY) using the unified inference engine.
 
-![Final Chart Detections](/c:/git/ai-trading-bot-4/assets/chart_detections.png)
+![Final Chart Detections](assets/chart_detections.png)
 
 ### 🖱️ Sidebar Marker Interaction
 You can now click on any neural network marker to see a detailed trade setup in the sidebar, including a **Mini Volume Profile** focused on the local accumulation zone.
 
 ````carousel
-![Buy Marker Sidebar Proof](/c:/git/ai-trading-bot-4/assets/buy_sidebar.png)
+![Buy Marker Sidebar Proof](assets/buy_sidebar.png)
 <!-- slide -->
-![Sell Marker Sidebar Proof](/c:/git/ai-trading-bot-4/assets/sell_sidebar.png)
+![Sell Marker Sidebar Proof](assets/sell_sidebar.png)
 ````
