@@ -54,7 +54,7 @@ if eth_private_key:
         zk_seeds = "dummy"
         l2_key = "dummy"
 else:
-    print("No ETH private key found")
+    print("No ETH pk found")
     zk_seeds = "dummy"
     l2_key = "dummy"
 

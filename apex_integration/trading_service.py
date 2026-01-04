@@ -69,11 +69,11 @@ def initialize_apex_clients():
     passphrase = os.getenv('APEXPRO_API_PASSPHRASE')
 
     # Derive ZK keys
-    logger.info("ZK credentials not found, attempting to derive from ETH private key...")
+    logger.info("ZK credentials not found, attempting to derive from ETH pk...")
     eth_private_key = os.getenv('APEXPRO_ETH_PRIVATE_KEY')
-    logger.info(f"ETH private key loaded: {'YES' if eth_private_key else 'NO'}")
+    logger.info(f"ETH pk loaded: {'YES' if eth_private_key else 'NO'}")
     if eth_private_key:
-        logger.info(f"Raw ETH private key: {eth_private_key[:10]}... (length: {len(eth_private_key)})")
+        logger.info(f"Raw ETH pk: {eth_private_key[:10]}... (length: {len(eth_private_key)})")
         # Ensure the private key has 0x prefix
         if not eth_private_key.startswith('0x'):
             eth_private_key = '0x' + eth_private_key
@@ -86,7 +86,7 @@ def initialize_apex_clients():
             logger.info(f"Hex conversion successful, length: {len(test_hex)}")
         except Exception as hex_error:
             logger.error(f"Hex conversion failed: {hex_error}")
-            raise Exception(f"Invalid ETH private key format: {hex_error}")
+            raise Exception(f"Invalid ETH pk format: {hex_error}")
 
         # Use HttpPrivate_v3 for derivation (same as demo_register_v3.py)
         temp_client = HttpPrivate_v3(APEX_OMNI_HTTP_MAIN, network_id=NETWORKID_MAIN, eth_private_key=eth_private_key)
@@ -102,12 +102,12 @@ def initialize_apex_clients():
             l2_key = derived_keys['l2Key']
             logger.info(f"ZK seeds length: {len(zk_seeds)}")
             logger.info(f"L2 key length: {len(l2_key)}")
-            logger.info("ZK credentials derived successfully from ETH private key")
+            logger.info("ZK credentials derived successfully from ETH pk")
         else:
             raise Exception("ZK key derivation returned invalid format")
     else:
-        logger.error("No ETH private key found in environment variables")
-        raise Exception("ETH private key required for ZK credential derivation")
+        logger.error("No ETH pk found in env vars")
+        raise Exception("ETH pk required for ZK credential derivation")
 
     client = HttpPrivateSign(APEX_OMNI_HTTP_MAIN, network_id=NETWORKID_OMNI_MAIN_ARB,
                              zk_seeds=zk_seeds, zk_l2Key=l2_key,
