@@ -1632,6 +1632,7 @@ if __name__ == "__main__":
         reload=True,
         reload_excludes="*.log",
         http="h11",
-        timeout_graceful_shutdown=1
+        timeout_graceful_shutdown=1,
+        lifespan="on"
     )
 
