@@ -10,6 +10,7 @@ import requests
 import asyncio
 import time
 from typing import Dict, Any, List
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -115,8 +116,24 @@ def initialize_apex_clients():
 
     client_public = HttpPublic(APEX_OMNI_HTTP_MAIN)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for startup and shutdown events.
+    Replaces deprecated @app.on_event("startup")
+    """
+    # Startup: Initialize clients and background tasks
+    initialize_apex_clients()
+    asyncio.create_task(monitor_trailing_stops_loop())
+    
+    yield
+    
+    # Shutdown: Cleanup if needed (nothing for now)
+    pass
+
 # FastAPI app setup
 app = FastAPI(
+    lifespan=lifespan,
     title="Apex Omni Trading Bot",
     description="""
     Professional automated trading service for Apex Omni perpetual contracts.
@@ -1600,11 +1617,7 @@ async def monitor_trailing_stops_loop():
             
         await asyncio.sleep(10) # Run every 10 seconds
 
-@app.on_event("startup")
-async def startup_event():
-    """Start background tasks on API startup."""
-    initialize_apex_clients()
-    asyncio.create_task(monitor_trailing_stops_loop())
+
 
 if __name__ == "__main__":
     import uvicorn
